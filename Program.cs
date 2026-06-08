@@ -713,22 +713,28 @@ static class Program
         }
     }
 
-    static void SetFrameText(string[] frame, int row, int col, string text, int displayWidth)
+    static void SetFrameText(string[] frame, int row, int col, string text, int frameWidth)
     {
         if (row < 0 || row >= frame.Length)
             return;
 
         string line = frame[row];
 
-        // Truncate and pad to exactly displayWidth (display width, not character count)
-        text = CharacterWidth.SmartTruncate(text, displayWidth);
-        text = CharacterWidth.PadToWidth(text, displayWidth);
+        // Truncate to display width (SmartTruncate accounts for CJK)
+        text = CharacterWidth.SmartTruncate(text, frameWidth - 1);
 
-        if (col + text.Length > line.Length)
+        // Pad to exactly frameWidth character positions
+        // This ensures consistent frame positioning regardless of CJK content
+        if (text.Length < frameWidth)
+            text = text.PadRight(frameWidth);
+        else if (text.Length > frameWidth)
+            text = text.Substring(0, frameWidth);
+
+        if (col + frameWidth > line.Length)
             return;
 
         string before = col > 0 ? line.Substring(0, col) : "";
-        string after = col + text.Length < line.Length ? line.Substring(col + text.Length) : "";
+        string after = col + frameWidth < line.Length ? line.Substring(col + frameWidth) : "";
 
         frame[row] = before + text + after;
     }
