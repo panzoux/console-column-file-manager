@@ -678,12 +678,12 @@ static class Program
         int displayX = 0;  // Track display position, not character position
 
         for (int i = State.HorizontalScroll;
-             i < Columns.Count && displayX < width;
+             i < Columns.Count && displayX + ColumnWidth <= width;
              i++)
         {
             bool isFirstVisible = (i == State.HorizontalScroll);
             DrawColumnToLines(lines, Columns[i], displayX, i == State.ActiveColumn, i < State.ActiveColumn, width, height, isFirstVisible);
-            displayX += ColumnWidth;  // Each column takes ColumnWidth display columns
+            displayX += ColumnWidth;
         }
 
         // Render each line to string and pad to window width
