@@ -638,8 +638,9 @@ static class Program
              i < Columns.Count && x < width;
              i++)
         {
-            DrawColumnToFrame(frame, Columns[i], x, i == State.ActiveColumn, i < State.ActiveColumn, width, height);
-            x += ColumnWidth;
+            // DrawColumnToFrame returns the actual character width it used
+            int columnCharWidth = DrawColumnToFrame(frame, Columns[i], x, i == State.ActiveColumn, i < State.ActiveColumn, width, height);
+            x += columnCharWidth;
         }
 
         // Full path line (above status)
@@ -658,7 +659,7 @@ static class Program
         return frame;
     }
 
-    static void DrawColumnToFrame(string[] frame, Column column, int left, bool active, bool isLeft, int frameWidth, int frameHeight)
+    static int DrawColumnToFrame(string[] frame, Column column, int left, bool active, bool isLeft, int frameWidth, int frameHeight)
     {
         int visibleHeight = frameHeight - 3;  // Reserve 3 rows: header + fullpath + status
 
@@ -683,7 +684,9 @@ static class Program
                 header = column.Path;
         }
         header = CharacterWidth.SmartTruncate(header, ColumnWidth - 1);
-        SetFrameText(frame, 0, left, header, ColumnWidth);
+
+        // Get actual character width used by this column
+        int columnCharWidth = SetFrameText(frame, 0, left, header, ColumnWidth);
 
         int startRow = 1;
         int scrollOffset = column.ScrollOffset;
@@ -711,32 +714,33 @@ static class Program
 
             SetFrameText(frame, startRow + i, left, display, ColumnWidth);
         }
+
+        // Return the actual character width used by this column
+        return columnCharWidth;
     }
 
-    static void SetFrameText(string[] frame, int row, int col, string text, int frameWidth)
+    static int SetFrameText(string[] frame, int row, int col, string text, int displayWidth)
     {
         if (row < 0 || row >= frame.Length)
-            return;
+            return 0;
 
         string line = frame[row];
 
-        // Truncate to display width (SmartTruncate accounts for CJK)
-        text = CharacterWidth.SmartTruncate(text, frameWidth - 1);
+        // Truncate to display width and pad to match display width
+        text = CharacterWidth.SmartTruncate(text, displayWidth);
+        text = CharacterWidth.PadToWidth(text, displayWidth);
 
-        // Pad to exactly frameWidth character positions
-        // This ensures consistent frame positioning regardless of CJK content
-        if (text.Length < frameWidth)
-            text = text.PadRight(frameWidth);
-        else if (text.Length > frameWidth)
-            text = text.Substring(0, frameWidth);
-
-        if (col + frameWidth > line.Length)
-            return;
+        int textLength = text.Length;
+        if (col + textLength > line.Length)
+            return 0;
 
         string before = col > 0 ? line.Substring(0, col) : "";
-        string after = col + frameWidth < line.Length ? line.Substring(col + frameWidth) : "";
+        string after = col + textLength < line.Length ? line.Substring(col + textLength) : "";
 
         frame[row] = before + text + after;
+
+        // Return the actual character width used
+        return textLength;
     }
 
 
