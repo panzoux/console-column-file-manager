@@ -677,7 +677,8 @@ static class Program
              i < Columns.Count && displayX < width;
              i++)
         {
-            DrawColumnToLines(lines, Columns[i], displayX, i == State.ActiveColumn, i < State.ActiveColumn, width, height);
+            bool isFirstVisible = (i == State.HorizontalScroll);
+            DrawColumnToLines(lines, Columns[i], displayX, i == State.ActiveColumn, i < State.ActiveColumn, width, height, isFirstVisible);
             displayX += ColumnWidth;  // Each column takes ColumnWidth display columns
         }
 
@@ -700,7 +701,7 @@ static class Program
         return frame;
     }
 
-    static void DrawColumnToLines(Line[] lines, Column column, int displayX, bool active, bool isLeft, int frameWidth, int frameHeight)
+    static void DrawColumnToLines(Line[] lines, Column column, int displayX, bool active, bool isLeft, int frameWidth, int frameHeight, bool isFirstVisible)
     {
         int visibleHeight = frameHeight - 3;  // Reserve 3 rows: header + fullpath + status
 
@@ -711,6 +712,11 @@ static class Program
             column.ScrollOffset = column.Selected;
         if (column.Selected >= column.ScrollOffset + visibleHeight)
             column.ScrollOffset = column.Selected - visibleHeight + 1;
+
+        // Content slot: non-first columns lose 1 display col to the separator
+        int separatorWidth = isFirstVisible ? 0 : 1;
+        int contentSlot = ColumnWidth - separatorWidth;  // display cols available for content
+        int maxEntryWidth = contentSlot - 2;             // minus 2-char prefix
 
         // Header - show only leaf name, not full path
         string header;
@@ -725,8 +731,7 @@ static class Program
                 header = column.Path;
         }
 
-        // Truncate header to fit in column width, add to line
-        header = CharacterWidth.SmartTruncate(header, ColumnWidth);
+        header = CharacterWidth.SmartTruncate(header, contentSlot);
         int headerDisplayWidth = CharacterWidth.GetStringWidth(header);
         lines[0].AddColumn(header, headerDisplayWidth, ColumnWidth);
 
@@ -751,7 +756,7 @@ static class Program
                 : "  ";
 
             // Truncate to fit, measure BEFORE colorizing (ANSI codes are zero-width)
-            string entry = CharacterWidth.SmartTruncate(text, ColumnWidth - 2);
+            string entry = CharacterWidth.SmartTruncate(text, maxEntryWidth);
             int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);  // prefix is always 2
 
             if (isDirectory)
