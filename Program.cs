@@ -29,44 +29,27 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
-/// <summary>
-/// Segment-based rendering (adapted from Ratatui approach)
-/// Tracks both character content and display width separately
-/// </summary>
-sealed class Segment
-{
-    public string Text { get; }
-    public int DisplayWidth { get; }
-
-    public Segment(string text, int displayWidth)
-    {
-        Text = text;
-        DisplayWidth = displayWidth;
-    }
-
-    public int CharWidth => Text.Length;
-}
 
 sealed class Line
 {
-    public List<Segment> Segments { get; } = new List<Segment>();
-    public int TotalDisplayWidth { get; private set; }
-    public int TotalCharWidth { get; private set; }
+    public List<string> ColumnContents { get; } = new List<string>();
 
-    public void AddSegment(string text, int displayWidth)
+    // Add a column (with padding to columnWidth display columns)
+    public void AddColumn(string content, int displayWidth, int columnWidth)
     {
-        Segments.Add(new Segment(text, displayWidth));
-        TotalDisplayWidth += displayWidth;
-        TotalCharWidth += text.Length;
+        int paddingNeeded = columnWidth - displayWidth;
+        if (paddingNeeded > 0)
+            content = content + new string(' ', paddingNeeded);
+
+        ColumnContents.Add(content);
     }
 
     public string Render(int targetWidth)
     {
-        // Render all segments and pad to targetWidth display columns
-        string result = string.Concat(Segments.Select(s => s.Text));
-        int paddingNeeded = targetWidth - TotalDisplayWidth;
-        if (paddingNeeded > 0)
-            result += new string(' ', paddingNeeded);
+        // Render all columns and pad the entire line to targetWidth
+        string result = string.Concat(ColumnContents);
+        if (result.Length < targetWidth)
+            result = result.PadRight(targetWidth);
         return result;
     }
 }
@@ -729,10 +712,10 @@ static class Program
                 header = column.Path;
         }
 
-        // Truncate header to fit in column width
+        // Truncate header to fit in column width, add to line
         header = CharacterWidth.SmartTruncate(header, ColumnWidth);
         int headerDisplayWidth = CharacterWidth.GetStringWidth(header);
-        lines[0].AddSegment(header, headerDisplayWidth);
+        lines[0].AddColumn(header, headerDisplayWidth, ColumnWidth);
 
         int startRow = 1;
         int scrollOffset = column.ScrollOffset;
@@ -760,7 +743,7 @@ static class Program
             string display = prefix + entry;
 
             int displayWidth = CharacterWidth.GetStringWidth(display);
-            lines[startRow + i].AddSegment(display, displayWidth);
+            lines[startRow + i].AddColumn(display, displayWidth, ColumnWidth);
         }
     }
 
