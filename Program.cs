@@ -100,6 +100,10 @@ static class CharacterWidth
         if (code >= 0xF900 && code <= 0xFAFF) return true;   // CJK Compatibility Ideographs
         if (code >= 0x2E80 && code <= 0x2EFF) return true;   // CJK Radicals Supplement
         if (code >= 0x3000 && code <= 0x303F) return true;   // CJK Symbols and Punctuation
+        if (code >= 0x3100 && code <= 0x31EF) return true;   // Bopomofo, Hangul Compat Jamo, Kanbun, CJK Strokes
+        if (code >= 0x3200 && code <= 0x32FF) return true;   // Enclosed CJK Letters and Months (㉒ etc.)
+        if (code >= 0x3300 && code <= 0x33FF) return true;   // CJK Compatibility
+        if (code >= 0xFE30 && code <= 0xFE4F) return true;   // CJK Compatibility Forms
         return false;
     }
 
