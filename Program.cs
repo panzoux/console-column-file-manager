@@ -32,26 +32,39 @@ using System.Text;
 
 sealed class Line
 {
-    public List<string> ColumnContents { get; } = new List<string>();
+    private readonly List<string> _cols = new List<string>();
+    private int _totalDisplayWidth;
 
-    // Add a column (with padding to columnWidth display columns)
+    // Separator takes 1 display col; content slot shrinks for non-first columns
     public void AddColumn(string content, int displayWidth, int columnWidth)
     {
-        int paddingNeeded = columnWidth - displayWidth;
-        if (paddingNeeded > 0)
-            content = content + new string(' ', paddingNeeded);
-
-        ColumnContents.Add(content);
+        bool isFirst = _cols.Count == 0;
+        int contentSlot = columnWidth - (isFirst ? 0 : 1);
+        int padding = contentSlot - displayWidth;
+        if (padding > 0)
+            content += new string(' ', padding);
+        if (!isFirst)
+            content = "|" + content;
+        _cols.Add(content);
+        _totalDisplayWidth += columnWidth;
     }
 
     public string Render(int targetWidth)
     {
-        // Render all columns and pad the entire line to targetWidth
-        string result = string.Concat(ColumnContents);
-        if (result.Length < targetWidth)
-            result = result.PadRight(targetWidth);
+        string result = string.Concat(_cols);
+        // Pad using display width, not character count
+        int padding = targetWidth - _totalDisplayWidth;
+        if (padding > 0)
+            result += new string(' ', padding);
         return result;
     }
+}
+
+static class AnsiColors
+{
+    public const string Blue = "\x1b[34m";
+    public const string Reset = "\x1b[0m";
+    public static string Colorize(string text, string color) => color + text + Reset;
 }
 
 /// <summary>
@@ -720,30 +733,31 @@ static class Program
         int startRow = 1;
         int scrollOffset = column.ScrollOffset;
 
-        for (int i = 0;
-             i < visibleHeight && scrollOffset + i < entryCount;
-             i++)
+        // Loop ALL visible rows so short columns still contribute empty cells
+        for (int i = 0; i < visibleHeight; i++)
         {
+            if (scrollOffset + i >= entryCount)
+            {
+                lines[startRow + i].AddColumn("", 0, ColumnWidth);
+                continue;
+            }
+
             string text = column.Entries[scrollOffset + i];
+            bool isDirectory = text.EndsWith("/");
             bool isSelected = (scrollOffset + i) == column.Selected;
 
-            string prefix;
-            if (isSelected)
-            {
-                // Active pane: "> " | Left pane only: "] "
-                prefix = active ? "> " : (isLeft ? "] " : "  ");
-            }
-            else
-            {
-                prefix = "  ";
-            }
+            string prefix = isSelected
+                ? (active ? "> " : (isLeft ? "] " : "  "))
+                : "  ";
 
-            // Truncate entry, accounting for prefix
+            // Truncate to fit, measure BEFORE colorizing (ANSI codes are zero-width)
             string entry = CharacterWidth.SmartTruncate(text, ColumnWidth - 2);
-            string display = prefix + entry;
+            int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);  // prefix is always 2
 
-            int displayWidth = CharacterWidth.GetStringWidth(display);
-            lines[startRow + i].AddColumn(display, displayWidth, ColumnWidth);
+            if (isDirectory)
+                entry = AnsiColors.Colorize(entry, AnsiColors.Blue);
+
+            lines[startRow + i].AddColumn(prefix + entry, displayWidth, ColumnWidth);
         }
     }
 
