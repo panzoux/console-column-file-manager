@@ -30,6 +30,48 @@ using System.IO;
 using System.Text;
 
 /// <summary>
+/// Segment-based rendering (adapted from Ratatui approach)
+/// Tracks both character content and display width separately
+/// </summary>
+sealed class Segment
+{
+    public string Text { get; }
+    public int DisplayWidth { get; }
+
+    public Segment(string text, int displayWidth)
+    {
+        Text = text;
+        DisplayWidth = displayWidth;
+    }
+
+    public int CharWidth => Text.Length;
+}
+
+sealed class Line
+{
+    public List<Segment> Segments { get; } = new List<Segment>();
+    public int TotalDisplayWidth { get; private set; }
+    public int TotalCharWidth { get; private set; }
+
+    public void AddSegment(string text, int displayWidth)
+    {
+        Segments.Add(new Segment(text, displayWidth));
+        TotalDisplayWidth += displayWidth;
+        TotalCharWidth += text.Length;
+    }
+
+    public string Render(int targetWidth)
+    {
+        // Render all segments and pad to targetWidth display columns
+        string result = string.Concat(Segments.Select(s => s.Text));
+        int paddingNeeded = targetWidth - TotalDisplayWidth;
+        if (paddingNeeded > 0)
+            result += new string(' ', paddingNeeded);
+        return result;
+    }
+}
+
+/// <summary>
 /// Proper CJK character width handling (adapted from twf\Utilities\CharacterWidthHelper.cs)
 /// </summary>
 static class CharacterWidth
@@ -628,38 +670,41 @@ static class Program
     {
         string[] frame = new string[height];
 
+        // Build frame using segment-based approach
+        Line[] lines = new Line[height];
         for (int i = 0; i < height; i++)
-            frame[i] = new string(' ', width);
+            lines[i] = new Line();
 
-        int visibleColumns = Math.Max(1, width / ColumnWidth);
-        int x = 0;
+        int displayX = 0;  // Track display position, not character position
 
         for (int i = State.HorizontalScroll;
-             i < Columns.Count && x < width;
+             i < Columns.Count && displayX < width;
              i++)
         {
-            // DrawColumnToFrame returns the actual character width it used
-            int columnCharWidth = DrawColumnToFrame(frame, Columns[i], x, i == State.ActiveColumn, i < State.ActiveColumn, width, height);
-            x += columnCharWidth;
+            DrawColumnToLines(lines, Columns[i], displayX, i == State.ActiveColumn, i < State.ActiveColumn, width, height);
+            displayX += ColumnWidth;  // Each column takes ColumnWidth display columns
+        }
+
+        // Render each line to string and pad to window width
+        for (int i = 0; i < height - 2; i++)
+        {
+            frame[i] = lines[i].Render(width);
         }
 
         // Full path line (above status)
         string fullPath = GetCurrentFullPath();
-        if (fullPath.Length > width)
-            fullPath = "..." + fullPath.Substring(fullPath.Length - (width - 3));
-        frame[height - 2] = fullPath.PadRight(width);
+        fullPath = CharacterWidth.SmartTruncate(fullPath, width);
+        frame[height - 2] = CharacterWidth.PadToWidth(fullPath, width);
 
         // Status line
         string status = "Esc=Quit | ↑↓=Select | ←→=Column | Enter=Open | Bksp=Parent | R=Refresh";
-        if (status.Length > width)
-            status = status.Substring(0, width);
-
-        frame[height - 1] = status.PadRight(width);
+        status = CharacterWidth.SmartTruncate(status, width);
+        frame[height - 1] = CharacterWidth.PadToWidth(status, width);
 
         return frame;
     }
 
-    static int DrawColumnToFrame(string[] frame, Column column, int left, bool active, bool isLeft, int frameWidth, int frameHeight)
+    static void DrawColumnToLines(Line[] lines, Column column, int displayX, bool active, bool isLeft, int frameWidth, int frameHeight)
     {
         int visibleHeight = frameHeight - 3;  // Reserve 3 rows: header + fullpath + status
 
@@ -683,10 +728,11 @@ static class Program
             if (string.IsNullOrEmpty(header))
                 header = column.Path;
         }
-        header = CharacterWidth.SmartTruncate(header, ColumnWidth - 1);
 
-        // Get actual character width used by this column
-        int columnCharWidth = SetFrameText(frame, 0, left, header, ColumnWidth);
+        // Truncate header to fit in column width
+        header = CharacterWidth.SmartTruncate(header, ColumnWidth);
+        int headerDisplayWidth = CharacterWidth.GetStringWidth(header);
+        lines[0].AddSegment(header, headerDisplayWidth);
 
         int startRow = 1;
         int scrollOffset = column.ScrollOffset;
@@ -698,50 +744,26 @@ static class Program
             string text = column.Entries[scrollOffset + i];
             bool isSelected = (scrollOffset + i) == column.Selected;
 
-            string display;
+            string prefix;
             if (isSelected)
             {
                 // Active pane: "> " | Left pane only: "] "
-                display = active ? "> " : (isLeft ? "] " : "  ");
+                prefix = active ? "> " : (isLeft ? "] " : "  ");
             }
             else
             {
-                display = "  ";
+                prefix = "  ";
             }
 
-            string entry = CharacterWidth.SmartTruncate(text, ColumnWidth - 3);
-            display += entry;
+            // Truncate entry, accounting for prefix
+            string entry = CharacterWidth.SmartTruncate(text, ColumnWidth - 2);
+            string display = prefix + entry;
 
-            SetFrameText(frame, startRow + i, left, display, ColumnWidth);
+            int displayWidth = CharacterWidth.GetStringWidth(display);
+            lines[startRow + i].AddSegment(display, displayWidth);
         }
-
-        // Return the actual character width used by this column
-        return columnCharWidth;
     }
 
-    static int SetFrameText(string[] frame, int row, int col, string text, int displayWidth)
-    {
-        if (row < 0 || row >= frame.Length)
-            return 0;
-
-        string line = frame[row];
-
-        // Truncate to display width and pad to match display width
-        text = CharacterWidth.SmartTruncate(text, displayWidth);
-        text = CharacterWidth.PadToWidth(text, displayWidth);
-
-        int textLength = text.Length;
-        if (col + textLength > line.Length)
-            return 0;
-
-        string before = col > 0 ? line.Substring(0, col) : "";
-        string after = col + textLength < line.Length ? line.Substring(col + textLength) : "";
-
-        frame[row] = before + text + after;
-
-        // Return the actual character width used
-        return textLength;
-    }
 
 
 
