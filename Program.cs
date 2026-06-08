@@ -163,6 +163,19 @@ static class CharacterWidth
 
         return text;
     }
+
+    public static string PadToWidth(string? text, int targetWidth, char padChar = ' ')
+    {
+        if (string.IsNullOrEmpty(text))
+            return new string(padChar, targetWidth);
+
+        int textWidth = GetStringWidth(text);
+        if (textWidth >= targetWidth)
+            return text;
+
+        int spacesNeeded = targetWidth - textWidth;
+        return text + new string(padChar, spacesNeeded);
+    }
 }
 
 sealed class Column
@@ -700,33 +713,24 @@ static class Program
         }
     }
 
-    static void SetFrameText(string[] frame, int row, int col, string text, int width)
+    static void SetFrameText(string[] frame, int row, int col, string text, int displayWidth)
     {
         if (row < 0 || row >= frame.Length)
             return;
 
         string line = frame[row];
 
-        // Truncate and pad text to exactly 'width' characters
-        // We treat width as character count, not display width
-        // SmartTruncate uses display width, but we then PadRight to character count
-        text = CharacterWidth.SmartTruncate(text, width);
+        // Truncate and pad to exactly displayWidth (display width, not character count)
+        text = CharacterWidth.SmartTruncate(text, displayWidth);
+        text = CharacterWidth.PadToWidth(text, displayWidth);
 
-        if (text.Length < width)
-            text = text.PadRight(width);
-        else if (text.Length > width)
-            text = text.Substring(0, width);
-
-        if (col + width > line.Length)
-            width = line.Length - col;
-
-        if (width <= 0)
+        if (col + text.Length > line.Length)
             return;
 
         string before = col > 0 ? line.Substring(0, col) : "";
-        string after = col + width < line.Length ? line.Substring(col + width) : "";
+        string after = col + text.Length < line.Length ? line.Substring(col + text.Length) : "";
 
-        frame[row] = before + text.Substring(0, width) + after;
+        frame[row] = before + text + after;
     }
 
 
