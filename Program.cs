@@ -588,6 +588,11 @@ static class Program
             }
             finally
             {
+                // Add placeholder if folder is empty (allows cursor display and future file creation)
+                if (column.Entries.Count == 0)
+                {
+                    column.Entries.Add("<No file>");
+                }
                 column.IsLoading = false;
             }
         }, ct);
