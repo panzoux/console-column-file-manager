@@ -667,9 +667,15 @@ static class Program
 
             // Reset debounce timer on every cursor move, rebuild if cursor stable for 300ms
             if (IsNavigationDebounced())
+            {
                 await RebuildRightSideAsync(State.ActiveColumn);
+            }
             else
+            {
                 CancelRightSideReads(State.ActiveColumn);
+                // Validate right pane matches current cursor; rebuild immediately if stale
+                await ValidateAndRebuildRightPaneIfNeeded(State.ActiveColumn);
+            }
         }
     }
 
@@ -688,9 +694,15 @@ static class Program
 
             // Reset debounce timer on every cursor move, rebuild if cursor stable for 300ms
             if (IsNavigationDebounced())
+            {
                 await RebuildRightSideAsync(State.ActiveColumn);
+            }
             else
+            {
                 CancelRightSideReads(State.ActiveColumn);
+                // Validate right pane matches current cursor; rebuild immediately if stale
+                await ValidateAndRebuildRightPaneIfNeeded(State.ActiveColumn);
+            }
         }
     }
 
@@ -711,6 +723,23 @@ static class Program
         for (int i = columnIndex + 1; i < Columns.Count; i++)
         {
             Columns[i].ReadCts?.Cancel();
+        }
+    }
+
+    static async Task ValidateAndRebuildRightPaneIfNeeded(int columnIndex)
+    {
+        // Check if right pane matches current cursor selection
+        // If cursor moved but right pane wasn't rebuilt (debounce), rebuild immediately
+        if (Columns.Count <= columnIndex + 1)
+            return;  // No right pane
+
+        string? currentSelection = GetSelectedDirectory(columnIndex);
+        Column rightPane = Columns[columnIndex + 1];
+
+        // If right pane's path doesn't match what cursor points to, rebuild immediately
+        if (currentSelection != null && currentSelection != rightPane.Path)
+        {
+            await RebuildRightSideAsync(columnIndex);
         }
     }
 
