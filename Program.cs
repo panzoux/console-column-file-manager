@@ -834,12 +834,22 @@ static class Program
         c.CachedChildren.Clear();
         c.CachedTime = DateTime.UtcNow.AddMilliseconds(-CacheExpireMs - 1);
         c.ReadCts?.Cancel();
-        c.Entries.Clear();
-        c.EntriesRead = 0;
-        c.DirectoriesCount = 0;
-        c.Selected = 0;
-        c.ScrollOffset = 0;
-        _ = RebuildRightSideAsync(State.ActiveColumn);
+
+        // Re-read current column and refresh right side
+        _ = RefreshCurrentAsync();
+    }
+
+    static async Task RefreshCurrentAsync()
+    {
+        Column current = Columns[State.ActiveColumn];
+        string currentPath = current.Path;
+
+        // Re-read current directory
+        Column refreshed = await CreateColumnAsync(currentPath, CancellationToken.None);
+        Columns[State.ActiveColumn] = refreshed;
+
+        // Rebuild right side based on refreshed column
+        await RebuildRightSideAsync(State.ActiveColumn);
     }
 
     static string GetCurrentFullPath()
