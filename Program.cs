@@ -649,9 +649,6 @@ static class Program
 
     static async Task MoveUpAsync()
     {
-        if (!IsNavigationDebounced())
-            return;
-
         Column c = Columns[State.ActiveColumn];
         int visibleHeight = Console.WindowHeight - 2;
 
@@ -663,15 +660,14 @@ static class Program
             if (c.Selected < c.ScrollOffset)
                 c.ScrollOffset = c.Selected;
 
-            await RebuildRightSideAsync(State.ActiveColumn);
+            // Only rebuild (read directory) if debounce allows
+            if (IsNavigationDebounced())
+                await RebuildRightSideAsync(State.ActiveColumn);
         }
     }
 
     static async Task MoveDownAsync()
     {
-        if (!IsNavigationDebounced())
-            return;
-
         Column c = Columns[State.ActiveColumn];
         int visibleHeight = Console.WindowHeight - 2;
 
@@ -683,7 +679,9 @@ static class Program
             if (c.Selected >= c.ScrollOffset + visibleHeight)
                 c.ScrollOffset = c.Selected - visibleHeight + 1;
 
-            await RebuildRightSideAsync(State.ActiveColumn);
+            // Only rebuild (read directory) if debounce allows
+            if (IsNavigationDebounced())
+                await RebuildRightSideAsync(State.ActiveColumn);
         }
     }
 
@@ -999,31 +997,43 @@ static class Program
             if (isSelected)
             {
                 if (active)
-                    prefix = "> ";  // Will add white background in rendering
+                    prefix = "> ";
                 else if (isLeft)
-                    prefix = "] ";  // Will add gray background in rendering
+                    prefix = "] ";
                 else
                     prefix = "  ";
             }
             else
                 prefix = "  ";
 
-            // Truncate to fit, measure BEFORE colorizing (ANSI codes are zero-width)
+            // Truncate to fit
             string entry = CharacterWidth.SmartTruncate(text, maxEntryWidth);
-            int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);  // prefix is always 2
 
-            if (isDirectory)
-                entry = AnsiColors.Colorize(entry, AnsiColors.Blue);
-
-            // Add background color for selected rows
             if (isSelected)
             {
-                // Active cursor: white background, inactive cursor: gray background
-                string bgPrefix = active ? "\x1b[47m> \x1b[0m" : "\x1b[100m] \x1b[0m";
-                lines[startRow + i].AddColumn(bgPrefix + entry, displayWidth, ColumnWidth);
+                // Background extends across full pane width
+                // Active: white bg, Inactive: gray bg
+                // Text: black for files, dark blue for directories
+                string bgColor = active ? "\x1b[47m" : "\x1b[100m";
+                string textColor = isDirectory ? "\x1b[34m" : "\x1b[30m";
+                string reset = "\x1b[0m";
+
+                string displayText = prefix + entry;
+                int displayTextWidth = CharacterWidth.GetStringWidth(displayText);
+                int paddingNeeded = Math.Max(0, contentSlot - displayTextWidth);
+
+                // Build full line: background + text color + content + padding + reset
+                string fullLine = bgColor + textColor + displayText + new string(' ', paddingNeeded) + reset;
+                int totalDisplayWidth = displayTextWidth + paddingNeeded;
+
+                lines[startRow + i].AddColumn(fullLine, totalDisplayWidth, ColumnWidth);
             }
             else
             {
+                // Non-selected: use original logic
+                int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);
+                if (isDirectory)
+                    entry = AnsiColors.Colorize(entry, AnsiColors.Blue);
                 lines[startRow + i].AddColumn(prefix + entry, displayWidth, ColumnWidth);
             }
         }
