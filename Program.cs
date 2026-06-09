@@ -28,6 +28,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 
 sealed class Line
@@ -229,6 +231,13 @@ sealed class Column
     public Dictionary<string, List<string>> CachedChildren;
     public DateTime CachedTime;
 
+    // Loading state for async operations
+    public bool IsLoading { get; set; }
+    public int EntriesRead { get; set; }
+    public int DirectoriesCount { get; set; }
+    public CancellationTokenSource? ReadCts { get; set; }
+    public Task? LoadingTask { get; set; }
+
     public Column(string path)
     {
         Path = path;
@@ -237,6 +246,9 @@ sealed class Column
         ScrollOffset = 0;
         CachedChildren = new Dictionary<string, List<string>>();
         CachedTime = DateTime.UtcNow;
+        IsLoading = false;
+        EntriesRead = 0;
+        DirectoriesCount = 0;
     }
 }
 
@@ -254,11 +266,13 @@ static class Program
     const int ColumnWidth = 32;
     const int CacheExpireMs = 2000;
     const int MaxPathLength = 100;
+    const int NavigationDebounceMs = 300;
 
     static readonly List<Column> Columns = new List<Column>();
     static readonly ScreenState State = new ScreenState();
+    static DateTime _lastNavigationTime = DateTime.MinValue;
 
-    static void Main()
+    static async Task Main()
     {
         try
         {
@@ -272,7 +286,7 @@ static class Program
         {
             string root = GetRootPath();
             Columns.Add(CreateColumn(root));
-            RebuildRightSide(0);
+            await RebuildRightSideAsync(0);
 
             while (true)
             {
@@ -299,7 +313,7 @@ static class Program
                         return;
 
                     default:
-                        HandleSpecialKey(key);
+                        await HandleSpecialKeyAsync(key);
                         break;
                 }
             }
@@ -326,16 +340,16 @@ static class Program
             System.Runtime.InteropServices.OSPlatform.Windows);
     }
 
-    static void HandleSpecialKey(ConsoleKeyInfo key)
+    static async Task HandleSpecialKeyAsync(ConsoleKeyInfo key)
     {
         switch (key.Key)
         {
             case ConsoleKey.UpArrow:
-                MoveUp();
+                await MoveUpAsync();
                 break;
 
             case ConsoleKey.DownArrow:
-                MoveDown();
+                await MoveDownAsync();
                 break;
 
             case ConsoleKey.LeftArrow:
@@ -347,7 +361,7 @@ static class Program
                 break;
 
             case ConsoleKey.Enter:
-                Enter();
+                await EnterAsync();
                 break;
 
             case ConsoleKey.Backspace:
@@ -413,6 +427,175 @@ static class Program
         return column;
     }
 
+    static Task<Column> CreateColumnAsync(string path, CancellationToken ct)
+    {
+        Column column = new Column(path);
+
+        // Special case: drive list for Windows
+        if (path == "::DRIVES::")
+        {
+            try
+            {
+                DriveInfo[] drives = DriveInfo.GetDrives();
+                for (int i = 0; i < drives.Length; i++)
+                {
+                    if (drives[i].IsReady)
+                    {
+                        column.Entries.Add(drives[i].Name.TrimEnd('\\') + "/");
+                    }
+                }
+            }
+            catch
+            {
+            }
+            column.IsLoading = false;
+            return Task.FromResult(column);
+        }
+
+        if (!IsValidPath(path))
+        {
+            column.IsLoading = false;
+            return Task.FromResult(column);
+        }
+
+        column.IsLoading = true;
+        column.EntriesRead = 0;
+        column.DirectoriesCount = 0;
+        column.ReadCts = new CancellationTokenSource();
+
+        column.LoadingTask = Task.Run(async () =>
+        {
+            try
+            {
+                int visibleHeight = Console.WindowHeight - 3;
+                int bufferSize = Math.Max(100, visibleHeight + 20);
+
+                List<string> dirs = new List<string>();
+                List<string> files = new List<string>();
+
+                // Read directories first (non-blocking enumeration)
+                try
+                {
+                    foreach (var dir in Directory.EnumerateDirectories(path))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        dirs.Add(dir);
+                        if (dirs.Count >= bufferSize)
+                            break;
+                    }
+                    dirs.Sort(StringComparer.OrdinalIgnoreCase);
+                    column.DirectoriesCount = dirs.Count;
+
+                    // Add to entries with "/" suffix
+                    foreach (var dir in dirs)
+                    {
+                        column.Entries.Add(Path.GetFileName(dir) + "/");
+                        column.EntriesRead++;
+                    }
+                }
+                catch
+                {
+                    // Permission denied or other errors
+                }
+
+                // Read files (up to remaining buffer)
+                int remainingBuffer = bufferSize - dirs.Count;
+                try
+                {
+                    foreach (var file in Directory.EnumerateFiles(path))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        files.Add(file);
+                        column.EntriesRead++;
+                        if (files.Count >= remainingBuffer)
+                            break;
+                    }
+                    files.Sort(StringComparer.OrdinalIgnoreCase);
+
+                    // Add to entries
+                    foreach (var file in files)
+                    {
+                        column.Entries.Add(Path.GetFileName(file));
+                    }
+                }
+                catch
+                {
+                    // Permission denied or other errors
+                }
+
+                // Continue reading rest in background
+                if (!ct.IsCancellationRequested)
+                {
+                    await Task.Run(() =>
+                    {
+                        try
+                        {
+                            List<string> restDirs = new List<string>();
+                            int count = 0;
+                            foreach (var dir in Directory.EnumerateDirectories(path))
+                            {
+                                if (ct.IsCancellationRequested)
+                                    return;
+                                if (count >= dirs.Count)
+                                {
+                                    restDirs.Add(dir);
+                                }
+                                count++;
+                            }
+
+                            List<string> restFiles = new List<string>();
+                            count = 0;
+                            foreach (var file in Directory.EnumerateFiles(path))
+                            {
+                                if (ct.IsCancellationRequested)
+                                    return;
+                                if (count >= files.Count)
+                                {
+                                    restFiles.Add(file);
+                                }
+                                count++;
+                            }
+
+                            restDirs.Sort(StringComparer.OrdinalIgnoreCase);
+                            restFiles.Sort(StringComparer.OrdinalIgnoreCase);
+
+                            foreach (var dir in restDirs)
+                            {
+                                if (ct.IsCancellationRequested)
+                                    return;
+                                column.Entries.Add(Path.GetFileName(dir) + "/");
+                                column.EntriesRead++;
+                            }
+
+                            foreach (var file in restFiles)
+                            {
+                                if (ct.IsCancellationRequested)
+                                    return;
+                                column.Entries.Add(Path.GetFileName(file));
+                                column.EntriesRead++;
+                            }
+                        }
+                        catch
+                        {
+                            // Permission denied or other errors
+                        }
+                    }, ct);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when navigating away
+            }
+            finally
+            {
+                column.IsLoading = false;
+            }
+        }, ct);
+
+        column.CachedTime = DateTime.UtcNow;
+        return Task.FromResult(column);
+    }
+
     static string GetRealPath(string path)
     {
         try
@@ -439,8 +622,36 @@ static class Program
         }
     }
 
-    static void MoveUp()
+    static string FindDeepestAccessiblePath(string path)
     {
+        try
+        {
+            DirectoryInfo di = new DirectoryInfo(path);
+            if (di.Exists)
+                return path;
+
+            // Walk backward to find the deepest accessible parent
+            while (di.Parent != null)
+            {
+                di = di.Parent;
+                if (di.Exists)
+                    return di.FullName;
+            }
+
+            // Return root as fallback
+            return IsWindows() ? "C:\\" : "/";
+        }
+        catch
+        {
+            return IsWindows() ? "C:\\" : "/";
+        }
+    }
+
+    static async Task MoveUpAsync()
+    {
+        if (!IsNavigationDebounced())
+            return;
+
         Column c = Columns[State.ActiveColumn];
         int visibleHeight = Console.WindowHeight - 2;
 
@@ -452,12 +663,15 @@ static class Program
             if (c.Selected < c.ScrollOffset)
                 c.ScrollOffset = c.Selected;
 
-            RebuildRightSide(State.ActiveColumn);
+            await RebuildRightSideAsync(State.ActiveColumn);
         }
     }
 
-    static void MoveDown()
+    static async Task MoveDownAsync()
     {
+        if (!IsNavigationDebounced())
+            return;
+
         Column c = Columns[State.ActiveColumn];
         int visibleHeight = Console.WindowHeight - 2;
 
@@ -469,8 +683,17 @@ static class Program
             if (c.Selected >= c.ScrollOffset + visibleHeight)
                 c.ScrollOffset = c.Selected - visibleHeight + 1;
 
-            RebuildRightSide(State.ActiveColumn);
+            await RebuildRightSideAsync(State.ActiveColumn);
         }
+    }
+
+    static bool IsNavigationDebounced()
+    {
+        DateTime now = DateTime.UtcNow;
+        if ((now - _lastNavigationTime).TotalMilliseconds < NavigationDebounceMs)
+            return false;
+        _lastNavigationTime = now;
+        return true;
     }
 
     static void MoveLeft()
@@ -502,7 +725,7 @@ static class Program
             State.HorizontalScroll = State.ActiveColumn - visibleColumns + 1;
     }
 
-    static void Enter()
+    static async Task EnterAsync()
     {
         Column c = Columns[State.ActiveColumn];
 
@@ -524,7 +747,7 @@ static class Program
         }
 
         UpdateHorizontalScroll();
-        RebuildRightSide(State.ActiveColumn - 1);
+        await RebuildRightSideAsync(State.ActiveColumn - 1);
     }
 
     static void Parent()
@@ -541,7 +764,13 @@ static class Program
         Column c = Columns[State.ActiveColumn];
         c.CachedChildren.Clear();
         c.CachedTime = DateTime.UtcNow.AddMilliseconds(-CacheExpireMs - 1);
-        RebuildRightSide(State.ActiveColumn);
+        c.ReadCts?.Cancel();
+        c.Entries.Clear();
+        c.EntriesRead = 0;
+        c.DirectoriesCount = 0;
+        c.Selected = 0;
+        c.ScrollOffset = 0;
+        _ = RebuildRightSideAsync(State.ActiveColumn);
     }
 
     static string GetCurrentFullPath()
@@ -565,16 +794,21 @@ static class Program
         return Path.Combine(c.Path, name.TrimEnd('/'));
     }
 
-    static void RebuildRightSide(int columnIndex)
+    static async Task RebuildRightSideAsync(int columnIndex)
     {
         while (Columns.Count > columnIndex + 1)
+        {
+            Column col = Columns[Columns.Count - 1];
+            // Cancel any ongoing reads
+            col.ReadCts?.Cancel();
             Columns.RemoveAt(Columns.Count - 1);
+        }
 
         string? nextPath = GetSelectedDirectory(columnIndex);
 
         while (nextPath != null)
         {
-            Column next = CreateColumn(nextPath);
+            Column next = await CreateColumnAsync(nextPath, CancellationToken.None);
             Columns.Add(next);
 
             nextPath = GetSelectedDirectory(Columns.Count - 1);
@@ -735,6 +969,12 @@ static class Program
                 header = column.Path;
         }
 
+        // Append progress counter if loading
+        if (column.IsLoading && column.EntriesRead > 0)
+        {
+            header += $" [{column.EntriesRead}]";
+        }
+
         header = CharacterWidth.SmartTruncate(header, contentSlot);
         int headerDisplayWidth = CharacterWidth.GetStringWidth(header);
         lines[0].AddColumn(header, headerDisplayWidth, ColumnWidth);
@@ -755,9 +995,18 @@ static class Program
             bool isDirectory = text.EndsWith("/");
             bool isSelected = (scrollOffset + i) == column.Selected;
 
-            string prefix = isSelected
-                ? (active ? "> " : (isLeft ? "] " : "  "))
-                : "  ";
+            string prefix;
+            if (isSelected)
+            {
+                if (active)
+                    prefix = "> ";  // Will add white background in rendering
+                else if (isLeft)
+                    prefix = "] ";  // Will add gray background in rendering
+                else
+                    prefix = "  ";
+            }
+            else
+                prefix = "  ";
 
             // Truncate to fit, measure BEFORE colorizing (ANSI codes are zero-width)
             string entry = CharacterWidth.SmartTruncate(text, maxEntryWidth);
@@ -766,7 +1015,17 @@ static class Program
             if (isDirectory)
                 entry = AnsiColors.Colorize(entry, AnsiColors.Blue);
 
-            lines[startRow + i].AddColumn(prefix + entry, displayWidth, ColumnWidth);
+            // Add background color for selected rows
+            if (isSelected)
+            {
+                // Active cursor: white background, inactive cursor: gray background
+                string bgPrefix = active ? "\x1b[47m> \x1b[0m" : "\x1b[100m] \x1b[0m";
+                lines[startRow + i].AddColumn(bgPrefix + entry, displayWidth, ColumnWidth);
+            }
+            else
+            {
+                lines[startRow + i].AddColumn(prefix + entry, displayWidth, ColumnWidth);
+            }
         }
     }
 
