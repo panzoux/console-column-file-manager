@@ -664,7 +664,11 @@ static class Program
             if (IsNavigationDebounced())
                 await RebuildRightSideAsync(State.ActiveColumn);
             else
+            {
+                // Skip rebuild but clear right pane to prevent sync issues
                 CancelRightSideReads(State.ActiveColumn);
+                ClearRightSideColumns(State.ActiveColumn);
+            }
         }
     }
 
@@ -685,7 +689,11 @@ static class Program
             if (IsNavigationDebounced())
                 await RebuildRightSideAsync(State.ActiveColumn);
             else
+            {
+                // Skip rebuild but clear right pane to prevent sync issues
                 CancelRightSideReads(State.ActiveColumn);
+                ClearRightSideColumns(State.ActiveColumn);
+            }
         }
     }
 
@@ -704,6 +712,16 @@ static class Program
         for (int i = columnIndex + 1; i < Columns.Count; i++)
         {
             Columns[i].ReadCts?.Cancel();
+        }
+    }
+
+    static void ClearRightSideColumns(int columnIndex)
+    {
+        // Remove columns to the right to prevent stale/out-of-sync data during rapid navigation
+        while (Columns.Count > columnIndex + 1)
+        {
+            Columns[Columns.Count - 1].ReadCts?.Cancel();
+            Columns.RemoveAt(Columns.Count - 1);
         }
     }
 
