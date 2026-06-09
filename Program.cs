@@ -729,15 +729,23 @@ static class Program
     static async Task ValidateAndRebuildRightPaneIfNeeded(int columnIndex)
     {
         // Check if right pane matches current cursor selection
-        // If cursor moved but right pane wasn't rebuilt (debounce), rebuild immediately
-        if (Columns.Count <= columnIndex + 1)
-            return;  // No right pane
-
+        // Rebuild if: cursor on directory but no right pane, or right pane is stale
         string? currentSelection = GetSelectedDirectory(columnIndex);
+
+        if (currentSelection == null)
+            return;  // Cursor on file, no right pane needed
+
+        if (Columns.Count <= columnIndex + 1)
+        {
+            // No right pane yet, but cursor points to directory → create it
+            await RebuildRightSideAsync(columnIndex);
+            return;
+        }
+
         Column rightPane = Columns[columnIndex + 1];
 
         // If right pane's path doesn't match what cursor points to, rebuild immediately
-        if (currentSelection != null && currentSelection != rightPane.Path)
+        if (currentSelection != rightPane.Path)
         {
             await RebuildRightSideAsync(columnIndex);
         }
