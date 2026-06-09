@@ -663,6 +663,8 @@ static class Program
             // Only rebuild (read directory) if debounce allows
             if (IsNavigationDebounced())
                 await RebuildRightSideAsync(State.ActiveColumn);
+            else
+                CancelRightSideReads(State.ActiveColumn);
         }
     }
 
@@ -682,6 +684,8 @@ static class Program
             // Only rebuild (read directory) if debounce allows
             if (IsNavigationDebounced())
                 await RebuildRightSideAsync(State.ActiveColumn);
+            else
+                CancelRightSideReads(State.ActiveColumn);
         }
     }
 
@@ -692,6 +696,15 @@ static class Program
             return false;
         _lastNavigationTime = now;
         return true;
+    }
+
+    static void CancelRightSideReads(int columnIndex)
+    {
+        // Cancel any pending directory reads on columns to the right of current
+        for (int i = columnIndex + 1; i < Columns.Count; i++)
+        {
+            Columns[i].ReadCts?.Cancel();
+        }
     }
 
     static void MoveLeft()
