@@ -670,9 +670,8 @@ static class Program
                 await RebuildRightSideAsync(State.ActiveColumn);
             else
             {
-                // Skip rebuild but clear right pane to prevent sync issues
+                // Skip rebuild but cancel ongoing reads to prevent showing old data
                 CancelRightSideReads(State.ActiveColumn);
-                ClearRightSideColumns(State.ActiveColumn);
             }
         }
     }
@@ -695,9 +694,8 @@ static class Program
                 await RebuildRightSideAsync(State.ActiveColumn);
             else
             {
-                // Skip rebuild but clear right pane to prevent sync issues
+                // Skip rebuild but cancel ongoing reads to prevent showing old data
                 CancelRightSideReads(State.ActiveColumn);
-                ClearRightSideColumns(State.ActiveColumn);
             }
         }
     }
@@ -714,19 +712,10 @@ static class Program
     static void CancelRightSideReads(int columnIndex)
     {
         // Cancel any pending directory reads on columns to the right of current
+        // This stops in-progress reads to prevent old data from updating after cursor moves
         for (int i = columnIndex + 1; i < Columns.Count; i++)
         {
             Columns[i].ReadCts?.Cancel();
-        }
-    }
-
-    static void ClearRightSideColumns(int columnIndex)
-    {
-        // Remove columns to the right to prevent stale/out-of-sync data during rapid navigation
-        while (Columns.Count > columnIndex + 1)
-        {
-            Columns[Columns.Count - 1].ReadCts?.Cancel();
-            Columns.RemoveAt(Columns.Count - 1);
         }
     }
 
