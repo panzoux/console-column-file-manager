@@ -357,7 +357,7 @@ static class Program
                 break;
 
             case ConsoleKey.RightArrow:
-                MoveRight();
+                await MoveRightAsync();
                 break;
 
             case ConsoleKey.Enter:
@@ -716,12 +716,26 @@ static class Program
         }
     }
 
-    static void MoveRight()
+    static async Task MoveRightAsync()
     {
         if (State.ActiveColumn + 1 < Columns.Count)
         {
+            // Right column exists, just move to it
             State.ActiveColumn++;
             UpdateHorizontalScroll();
+        }
+        else if (State.ActiveColumn < Columns.Count)
+        {
+            // No right column - force rebuild to show right pane (e.g., from slow read)
+            // This will read the directory of the currently selected entry
+            await RebuildRightSideAsync(State.ActiveColumn);
+
+            // If a new column was created, move to it
+            if (State.ActiveColumn + 1 < Columns.Count)
+            {
+                State.ActiveColumn++;
+                UpdateHorizontalScroll();
+            }
         }
     }
 
