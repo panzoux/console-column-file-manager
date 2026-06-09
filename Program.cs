@@ -665,14 +665,11 @@ static class Program
             if (c.Selected < c.ScrollOffset)
                 c.ScrollOffset = c.Selected;
 
-            // Only rebuild (read directory) if debounce allows
+            // Reset debounce timer on every cursor move, rebuild if cursor stable for 300ms
             if (IsNavigationDebounced())
                 await RebuildRightSideAsync(State.ActiveColumn);
             else
-            {
-                // Skip rebuild but cancel ongoing reads to prevent showing old data
                 CancelRightSideReads(State.ActiveColumn);
-            }
         }
     }
 
@@ -689,24 +686,22 @@ static class Program
             if (c.Selected >= c.ScrollOffset + visibleHeight)
                 c.ScrollOffset = c.Selected - visibleHeight + 1;
 
-            // Only rebuild (read directory) if debounce allows
+            // Reset debounce timer on every cursor move, rebuild if cursor stable for 300ms
             if (IsNavigationDebounced())
                 await RebuildRightSideAsync(State.ActiveColumn);
             else
-            {
-                // Skip rebuild but cancel ongoing reads to prevent showing old data
                 CancelRightSideReads(State.ActiveColumn);
-            }
         }
     }
 
     static bool IsNavigationDebounced()
     {
         DateTime now = DateTime.UtcNow;
-        if ((now - _lastNavigationTime).TotalMilliseconds < NavigationDebounceMs)
-            return false;
-        _lastNavigationTime = now;
-        return true;
+        // Check if 300ms has passed since cursor LAST MOVED (not last rebuild)
+        // Always update timer on cursor move to implement "reset on move" behavior
+        bool shouldRebuild = (now - _lastNavigationTime).TotalMilliseconds >= NavigationDebounceMs;
+        _lastNavigationTime = now;  // Reset timer on every cursor move
+        return shouldRebuild;
     }
 
     static void CancelRightSideReads(int columnIndex)
