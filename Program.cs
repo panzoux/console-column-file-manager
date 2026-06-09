@@ -981,9 +981,9 @@ static class Program
         }
 
         // Append progress counter if loading
-        if (column.IsLoading && column.EntriesRead > 0)
+        if (column.IsLoading)
         {
-            header += $" [{column.EntriesRead}]";
+            header += $" [loading {column.EntriesRead}]";
         }
 
         header = CharacterWidth.SmartTruncate(header, contentSlot);
