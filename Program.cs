@@ -26,6 +26,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -271,6 +272,7 @@ static class Program
     static readonly List<Column> Columns = new List<Column>();
     static readonly ScreenState State = new ScreenState();
     static DateTime _lastNavigationTime = DateTime.MinValue;
+    static string? _lastErrorMessage = null;
 
     static async Task Main()
     {
@@ -361,7 +363,10 @@ static class Program
                 break;
 
             case ConsoleKey.Enter:
-                await EnterAsync();
+                if ((key.Modifiers & ConsoleModifiers.Control) != 0)
+                    await OpenFileAsync();
+                else
+                    await EnterAsync();
                 break;
 
             case ConsoleKey.Backspace:
@@ -819,6 +824,55 @@ static class Program
         await RebuildRightSideAsync(State.ActiveColumn - 1);
     }
 
+    static async Task OpenFileAsync()
+    {
+        Column c = Columns[State.ActiveColumn];
+
+        if (c.Entries.Count == 0)
+            return;
+
+        string name = c.Entries[c.Selected];
+
+        // Only open files, not directories
+        if (name.EndsWith("/"))
+            return;
+
+        string filePath = GetCurrentFullPath();
+        await LaunchFileAsync(filePath);
+    }
+
+    static async Task LaunchFileAsync(string filePath)
+    {
+        try
+        {
+            if (IsWindows())
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = filePath,
+                    UseShellExecute = true
+                });
+            }
+            else if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                Process.Start("/usr/bin/open", filePath);
+            }
+            else
+            {
+                // Linux and other Unix-like systems
+                Process.Start("xdg-open", filePath);
+            }
+            _lastErrorMessage = null;
+        }
+        catch
+        {
+            _lastErrorMessage = "Cannot open file";
+        }
+
+        await Task.CompletedTask;
+    }
+
     static void Parent()
     {
         if (State.ActiveColumn == 0)
@@ -1011,7 +1065,16 @@ static class Program
         frame[height - 2] = CharacterWidth.PadToWidth(fullPath, width);
 
         // Status line
-        string status = "Esc=Quit | ↑↓=Select | ←→=Column | Enter=Open | Bksp=Parent | R=Refresh";
+        string status;
+        if (_lastErrorMessage != null)
+        {
+            status = _lastErrorMessage;
+            _lastErrorMessage = null;  // Clear error after displaying
+        }
+        else
+        {
+            status = "Esc=Quit | ↑↓=Select | ←→=Column | Enter=Open | Ctrl+Enter=Open File | Bksp=Parent | R=Refresh";
+        }
         status = CharacterWidth.SmartTruncate(status, width);
         frame[height - 1] = CharacterWidth.PadToWidth(status, width);
 
