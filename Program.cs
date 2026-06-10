@@ -907,7 +907,7 @@ static class Program
 
         try
         {
-            string ctxmenuPath = null;
+            string? ctxmenuPath = null;
 
             // Try to find ctxmenu.exe in application directory first
             string appDir = AppContext.BaseDirectory;
@@ -923,7 +923,9 @@ static class Program
             }
 
             // Try to launch - will throw if not found in PATH
-            Process.Start(ctxmenuPath, filePath);
+            // Quote the file path to handle spaces and special characters (including Unicode)
+            string quotedPath = $"\"{filePath}\"";
+            Process.Start(ctxmenuPath, quotedPath);
             _lastErrorMessage = null;
         }
         catch
