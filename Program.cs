@@ -363,7 +363,9 @@ static class Program
                 break;
 
             case ConsoleKey.Enter:
-                if ((key.Modifiers & ConsoleModifiers.Control) != 0)
+                if ((key.Modifiers & ConsoleModifiers.Shift) != 0)
+                    await ShowContextMenuAsync();
+                else if ((key.Modifiers & ConsoleModifiers.Control) != 0)
                     await OpenFileAsync();
                 else
                     await EnterAsync();
@@ -873,6 +875,65 @@ static class Program
         await Task.CompletedTask;
     }
 
+    static async Task ShowContextMenuAsync()
+    {
+        // Windows only - show context menu
+        if (!IsWindows())
+            return;
+
+        Column c = Columns[State.ActiveColumn];
+
+        if (c.Entries.Count == 0)
+            return;
+
+        string name = c.Entries[c.Selected];
+
+        // Only show context menu for files, not directories
+        if (name.EndsWith("/"))
+            return;
+
+        string filePath = GetCurrentFullPath();
+        await LaunchContextMenuAsync(filePath);
+    }
+
+    static async Task LaunchContextMenuAsync(string filePath)
+    {
+        // Windows only
+        if (!IsWindows())
+        {
+            await Task.CompletedTask;
+            return;
+        }
+
+        try
+        {
+            string ctxmenuPath = null;
+
+            // Try to find ctxmenu.exe in application directory first
+            string appDir = AppContext.BaseDirectory;
+            string appDirPath = Path.Combine(appDir, "ctxmenu.exe");
+            if (File.Exists(appDirPath))
+            {
+                ctxmenuPath = appDirPath;
+            }
+            else
+            {
+                // Try to find in PATH - just use the name and let Windows search PATH
+                ctxmenuPath = "ctxmenu.exe";
+            }
+
+            // Try to launch - will throw if not found in PATH
+            Process.Start(ctxmenuPath, filePath);
+            _lastErrorMessage = null;
+        }
+        catch
+        {
+            _lastErrorMessage = "ctxmenu.exe not found";
+        }
+
+        await Task.CompletedTask;
+    }
+
     static void Parent()
     {
         if (State.ActiveColumn == 0)
@@ -1073,7 +1134,10 @@ static class Program
         }
         else
         {
-            status = "Esc=Quit | ↑↓=Select | ←→=Column | Enter=Open | Ctrl+Enter=Open File | Bksp=Parent | R=Refresh";
+            if (IsWindows())
+                status = "Esc=Quit | ↑↓=Select | ←→=Column | Enter=Open | Ctrl+Enter=Open | Shift+Enter=Menu | Bksp=Parent | R=Refresh";
+            else
+                status = "Esc=Quit | ↑↓=Select | ←→=Column | Enter=Open | Ctrl+Enter=Open File | Bksp=Parent | R=Refresh";
         }
         status = CharacterWidth.SmartTruncate(status, width);
         frame[height - 1] = CharacterWidth.PadToWidth(status, width);
