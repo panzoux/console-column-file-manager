@@ -448,6 +448,209 @@ internal sealed class PreviewPane
     }
 }
 
+internal static class PreviewLoader
+{
+    // ── Extension-mismatch detection ──────────────────────────────────────
+
+    internal static string? CheckExtensionMismatch(string filePath, FileType detected)
+    {
+        if (detected.Category == FileCategory.Binary || detected.Category == FileCategory.Text)
+            return null; // too ambiguous to warn on
+
+        string ext = System.IO.Path.GetExtension(filePath);
+        if (string.IsNullOrEmpty(ext)) return null;
+
+        // Try extension-only detection (pass empty magic so only ext map is used)
+        var extOnly = FileTypeDetector.Detect(filePath, ReadOnlySpan<byte>.Empty);
+        if (extOnly.Category == FileCategory.Binary) return null; // extension unknown
+
+        if (extOnly.Category != detected.Category)
+            return $"⚠ {ext} extension but detected as {detected.Label}";
+        return null;
+    }
+
+    // ── Public dispatch ────────────────────────────────────────────────────
+
+    public static async Task<PreviewContent> LoadAsync(
+        string filePath, bool isDrive, FileType fileType,
+        int width, int height, CancellationToken ct)
+    {
+        string modified = GetModified(filePath, isDrive);
+        int bodyHeight = Math.Max(1, height - 5); // header + info + date + divider + status rows
+
+        try
+        {
+            if (isDrive)
+                return LoadDrive(filePath, width, bodyHeight);
+
+            string? mismatch = CheckExtensionMismatch(filePath, fileType);
+
+            var content = fileType.Category switch
+            {
+                FileCategory.Text      => await LoadTextAsync(filePath, fileType, modified, width, bodyHeight, ct),
+                FileCategory.Image     => LoadImageMeta(filePath, fileType, modified, width),
+                FileCategory.Video     => LoadVideoMeta(filePath, fileType, modified, width),
+                FileCategory.Audio     => LoadAudioMeta(filePath, fileType, modified, width),
+                FileCategory.Archive   => await LoadArchiveAsync(filePath, fileType, modified, width, bodyHeight, ct),
+                FileCategory.Executable=> LoadExecutable(filePath, fileType, modified, width),
+                FileCategory.Pdf       => LoadPdf(filePath, fileType, modified, width),
+                _                      => await LoadBinaryAsync(filePath, fileType, modified, width, bodyHeight, ct),
+            };
+
+            return mismatch != null ? content with { ExtMismatch = mismatch } : content;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            return new PreviewContent(fileType.Label, ex.Message, modified, [], false);
+        }
+    }
+
+    // ── Hex helpers (internal for tests) ───────────────────────────────────
+
+    internal static int CalcBytesPerRow(int previewWidth)
+    {
+        // Layout per row: 8 (addr) + 2 (gap) + N*3 (hex) + 1 (gap) + N (ascii) + 4 (margin) = 15 + 4N
+        int n = (previewWidth - 15) / 4;
+        return Math.Clamp(n, 4, 16);
+    }
+
+    internal static string[] FormatHexLines(byte[] data, int bytesPerRow, int previewWidth)
+    {
+        int rowCount = (data.Length + bytesPerRow - 1) / bytesPerRow;
+        string[] lines = new string[rowCount];
+        var sb = new System.Text.StringBuilder(previewWidth + 4);
+
+        for (int row = 0; row < rowCount; row++)
+        {
+            sb.Clear();
+            int offset = row * bytesPerRow;
+            sb.Append(offset.ToString("X8"));
+            sb.Append("  ");
+
+            // Hex part
+            for (int i = 0; i < bytesPerRow; i++)
+            {
+                if (offset + i < data.Length)
+                    sb.Append(data[offset + i].ToString("X2")).Append(' ');
+                else
+                    sb.Append("   ");
+            }
+
+            sb.Append(' ');
+
+            // ASCII part
+            for (int i = 0; i < bytesPerRow; i++)
+            {
+                if (offset + i >= data.Length) break;
+                byte b = data[offset + i];
+                sb.Append(b >= 0x20 && b < 0x7F ? (char)b : '.');
+            }
+
+            lines[row] = sb.ToString();
+        }
+        return lines;
+    }
+
+    // ── Text ───────────────────────────────────────────────────────────────
+
+    private static async Task<PreviewContent> LoadTextAsync(
+        string filePath, FileType fileType, string modified,
+        int width, int bodyHeight, CancellationToken ct)
+    {
+        string encoding = "UTF-8";
+        int lineCount = 0;
+        var bodyLines = new List<string>(bodyHeight + 1);
+
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
+
+        // Detect encoding from BOM
+        byte[] bom = new byte[4];
+        int bomRead = await fs.ReadAsync(bom, ct);
+        if (bomRead >= 3 && bom[0]==0xEF && bom[1]==0xBB && bom[2]==0xBF) encoding = "UTF-8 BOM";
+        else if (bomRead >= 2 && bom[0]==0xFF && bom[1]==0xFE) encoding = "UTF-16 LE";
+        else if (bomRead >= 2 && bom[0]==0xFE && bom[1]==0xFF) encoding = "UTF-16 BE";
+        fs.Seek(0, SeekOrigin.Begin);
+
+        using var reader = new StreamReader(fs, detectEncodingFromByteOrderMarks: true, leaveOpen: false);
+        const int maxCountLines = 10_000;
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) != null)
+        {
+            ct.ThrowIfCancellationRequested();
+            lineCount++;
+            if (bodyLines.Count < bodyHeight)
+                bodyLines.Add(CharacterWidth.SmartTruncate(line, width - 1));
+        }
+
+        string lineInfo = lineCount >= maxCountLines ? $"> {maxCountLines} lines" : $"{lineCount} lines";
+        string infoLine = $"{encoding} · {lineInfo} · {FormatSize(new FileInfo(filePath).Length)}";
+        return new PreviewContent(fileType.Label, infoLine, modified, [.. bodyLines], false);
+    }
+
+    // ── Binary / hex fallback ──────────────────────────────────────────────
+
+    private static async Task<PreviewContent> LoadBinaryAsync(
+        string filePath, FileType fileType, string modified,
+        int width, int bodyHeight, CancellationToken ct)
+    {
+        int bytesPerRow = CalcBytesPerRow(width);
+        int bytesToRead = Math.Min(bytesPerRow * bodyHeight, 4096);
+
+        byte[] buf = new byte[bytesToRead];
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
+        int read = await fs.ReadAsync(buf.AsMemory(0, bytesToRead), ct);
+
+        byte[] data = buf[..read];
+        string[] hexLines = FormatHexLines(data, bytesPerRow, width);
+
+        long size = new FileInfo(filePath).Length;
+        string infoLine = $"{FormatSize(size)}";
+        return new PreviewContent(fileType.Label, infoLine, modified, hexLines, false);
+    }
+
+    // ── Shared utilities ───────────────────────────────────────────────────
+
+    private static string GetModified(string filePath, bool isDrive)
+    {
+        if (isDrive) return "";
+        try { return File.GetLastWriteTime(filePath).ToString("yyyy-MM-dd HH:mm"); }
+        catch { return ""; }
+    }
+
+    internal static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+    private static string[] TruncateLines(IEnumerable<string> lines, int width)
+    {
+        var result = new List<string>();
+        foreach (var l in lines)
+            result.Add(CharacterWidth.SmartTruncate(l, width - 1));
+        return [.. result];
+    }
+
+    // ── Stubs (implemented in later tasks) ────────────────────────────────
+    private static PreviewContent LoadDrive(string p, int w, int h)
+        => new("Drive", "", "", [], false);
+    private static PreviewContent LoadImageMeta(string p, FileType t, string m, int w)
+        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
+    private static PreviewContent LoadVideoMeta(string p, FileType t, string m, int w)
+        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
+    private static PreviewContent LoadAudioMeta(string p, FileType t, string m, int w)
+        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
+    private static Task<PreviewContent> LoadArchiveAsync(string p, FileType t, string m, int w, int h, CancellationToken ct)
+        => Task.FromResult(new PreviewContent(t.Label, FormatSize(new FileInfo(p).Length), m, [], false));
+    private static PreviewContent LoadExecutable(string p, FileType t, string m, int w)
+        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
+    private static PreviewContent LoadPdf(string p, FileType t, string m, int w)
+        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
+}
+
 static class Program
 {
     const int ColumnWidth = 32;
