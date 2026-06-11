@@ -1364,7 +1364,13 @@ static class Program
 
         var cts = new CancellationTokenSource();
         State.Preview.Cts = cts;
-        int width = Math.Max(ColumnWidth, Console.WindowWidth - (Columns.Count - State.HorizontalScroll) * ColumnWidth);
+        int termWidth = Console.WindowWidth;
+        int drawnCols = 0;
+        for (int i = State.HorizontalScroll; i < Columns.Count && (drawnCols + 1) * ColumnWidth <= termWidth; i++)
+            drawnCols++;
+        // Leave one slot for the preview (matching BuildFrame's behavior when preview is shown)
+        if (drawnCols > 0) drawnCols--;
+        int width = Math.Max(ColumnWidth, termWidth - drawnCols * ColumnWidth);
         int height = Console.WindowHeight;
 
         _ = Task.Run(async () =>
@@ -2354,9 +2360,6 @@ static class Program
     static void DrawPreviewToLines(Line[] lines, PreviewContent content, int startX, int previewWidth, int frameHeight)
     {
         int visibleHeight = frameHeight - 3; // same as column body height
-
-        static string Spinner(int tick) => (tick / 4 % 8) switch
-        { 0=>"⠋", 1=>"⠙", 2=>"⠹", 3=>"⠸", 4=>"⠼", 5=>"⠴", 6=>"⠦", 7=>"⠧", _=>"⠋" };
 
         // Row 0: type label
         string headerLabel = CharacterWidth.SmartTruncate(content.TypeLabel, previewWidth - 1);
