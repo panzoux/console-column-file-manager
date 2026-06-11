@@ -1327,6 +1327,69 @@ static class Program
         return (System.IO.Path.Combine(c.Path, name), false);
     }
 
+    static void StartPreviewLoad()
+    {
+        var target = GetPreviewTarget();
+        if (target == null || !State.Preview.IsVisible) return;
+
+        string path = target.Value.Path;
+        bool isDrive = target.Value.IsDrive;
+
+        // Skip reload if already showing this path
+        if (State.Preview.CurrentPath == path && State.Preview.Content != null && !State.Preview.IsLoading)
+            return;
+
+        State.Preview.Cancel();
+        State.Preview.CurrentPath = path;
+        State.Preview.IsLoading = true;
+        State.Preview.Content = null;
+
+        // Read first 16 bytes for type detection
+        byte[] magic = new byte[16];
+        try
+        {
+            if (!isDrive)
+            {
+                using var fs = File.OpenRead(path);
+                fs.Read(magic, 0, 16);
+            }
+        }
+        catch { }
+
+        FileType fileType = isDrive
+            ? new FileType(FileCategory.Drive, "Drive")
+            : FileTypeDetector.Detect(path, magic);
+        State.Preview.CurrentType = fileType;
+
+        var cts = new CancellationTokenSource();
+        State.Preview.Cts = cts;
+        int width = Math.Max(ColumnWidth, Console.WindowWidth - (Columns.Count - State.HorizontalScroll) * ColumnWidth);
+        int height = Console.WindowHeight;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var content = await PreviewLoader.LoadAsync(path, isDrive, fileType, width, height, cts.Token);
+                if (!cts.Token.IsCancellationRequested)
+                {
+                    State.Preview.Content = content;
+                    State.Preview.IsLoading = false;
+                    Draw();
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch { State.Preview.IsLoading = false; }
+        }, cts.Token);
+    }
+
+    static void CancelPreviewLoad()
+    {
+        State.Preview.Cancel();
+        State.Preview.Content = null;
+        State.Preview.CurrentPath = null;
+    }
+
     static async Task HandleSpecialKeyAsync(ConsoleKeyInfo key)
     {
         switch (key.Key)
@@ -1358,6 +1421,19 @@ static class Program
 
             case ConsoleKey.Backspace:
                 Parent();
+                break;
+
+            case ConsoleKey.V:
+                if ((key.Modifiers & ConsoleModifiers.Shift) != 0)
+                {
+                    State.Preview.IsVisible = !State.Preview.IsVisible;
+                    UpdateHorizontalScroll();
+                    if (State.Preview.IsVisible)
+                        StartPreviewLoad();
+                    else
+                        CancelPreviewLoad();
+                    Draw();
+                }
                 break;
         }
     }
@@ -1668,6 +1744,7 @@ static class Program
                 // Validate right pane matches current cursor; rebuild immediately if stale
                 await ValidateAndRebuildRightPaneIfNeeded(State.ActiveColumn);
             }
+            if (State.Preview.IsVisible) StartPreviewLoad();
         }
     }
 
@@ -1695,6 +1772,7 @@ static class Program
                 // Validate right pane matches current cursor; rebuild immediately if stale
                 await ValidateAndRebuildRightPaneIfNeeded(State.ActiveColumn);
             }
+            if (State.Preview.IsVisible) StartPreviewLoad();
         }
     }
 
@@ -1749,6 +1827,7 @@ static class Program
         {
             State.ActiveColumn--;
             UpdateHorizontalScroll();
+            if (State.Preview.IsVisible) StartPreviewLoad();
         }
     }
 
@@ -1809,6 +1888,8 @@ static class Program
         }
 
         UpdateHorizontalScroll();
+        CancelPreviewLoad();
+        if (State.Preview.IsVisible) StartPreviewLoad();
         await RebuildRightSideAsync(State.ActiveColumn - 1);
     }
 
@@ -1929,6 +2010,7 @@ static class Program
 
         State.ActiveColumn--;
         UpdateHorizontalScroll();
+        if (State.Preview.IsVisible) StartPreviewLoad();
     }
 
     static void RefreshCurrent()
