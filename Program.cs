@@ -1777,7 +1777,8 @@ static class Program
 
     static void UpdateHorizontalScroll()
     {
-        int visibleColumns = Math.Max(1, Console.WindowWidth / ColumnWidth);
+        bool previewTakesSlot = State.Preview.IsVisible && SelectedItemIsFileOrDrive();
+        int visibleColumns = Math.Max(1, Console.WindowWidth / ColumnWidth - (previewTakesSlot ? 1 : 0));
 
         if (State.ActiveColumn < State.HorizontalScroll)
             State.HorizontalScroll = State.ActiveColumn;
@@ -2090,7 +2091,13 @@ static class Program
         for (int i = 0; i < height; i++)
             lines[i] = new Line();
 
-        int displayX = 0;  // Track display position, not character position
+        // Determine if preview should be shown
+        bool showPreview = State.Preview.IsVisible
+            && SelectedItemIsFileOrDrive()
+            && Console.WindowWidth >= ColumnWidth * 2;
+
+        int displayX = 0;
+        int drawnColumnsWidth = 0;
 
         for (int i = State.HorizontalScroll;
              i < Columns.Count && displayX + ColumnWidth <= width;
@@ -2099,6 +2106,25 @@ static class Program
             bool isFirstVisible = (i == State.HorizontalScroll);
             DrawColumnToLines(lines, Columns[i], displayX, i == State.ActiveColumn, i < State.ActiveColumn, width, height, isFirstVisible);
             displayX += ColumnWidth;
+            drawnColumnsWidth += ColumnWidth;
+        }
+
+        // Preview pane
+        if (showPreview)
+        {
+            int previewWidth = width - drawnColumnsWidth;
+            PreviewContent content;
+            if (State.Preview.IsLoading || State.Preview.Content == null)
+            {
+                content = new PreviewContent("Loading…", "", "", ["⠋"], true);
+            }
+            else
+            {
+                content = State.Preview.Content;
+            }
+
+            if (previewWidth >= ColumnWidth)
+                DrawPreviewToLines(lines, content, drawnColumnsWidth, previewWidth, height);
         }
 
         // Render each line to string and pad to window width
@@ -2111,6 +2137,12 @@ static class Program
         string fullPath = GetCurrentFullPath();
         fullPath = CharacterWidth.SmartTruncate(fullPath, width);
         frame[height - 2] = CharacterWidth.PadToWidth(fullPath, width);
+
+        // Override status with preview-hidden hint if applicable
+        if (State.Preview.IsVisible && !showPreview && Console.WindowWidth > 0)
+        {
+            _lastErrorMessage = "[preview hidden: narrow terminal]";
+        }
 
         // Status line
         string status;
