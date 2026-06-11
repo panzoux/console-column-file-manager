@@ -32,6 +32,166 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
+internal enum FileCategory { Text, Image, Video, Audio, Archive, Executable, Pdf, Drive, Binary }
+
+internal record FileType(FileCategory Category, string Label, string MimeType = "");
+
+internal static class FileTypeDetector
+{
+    private static readonly (int Offset, byte[] Sig, FileType Type)[] _sigs =
+    [
+        (0,  [0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A], new(FileCategory.Image,      "PNG Image",         "image/png")),
+        (0,  [0x66,0x4C,0x61,0x43],                      new(FileCategory.Audio,      "FLAC Audio",        "audio/flac")),
+        (0,  [0x4F,0x67,0x67,0x53],                      new(FileCategory.Audio,      "OGG Audio",         "audio/ogg")),
+        (0,  [0x1A,0x45,0xDF,0xA3],                      new(FileCategory.Video,      "Matroska Video",    "video/x-matroska")),
+        (0,  [0x47,0x49,0x46,0x38],                      new(FileCategory.Image,      "GIF Image",         "image/gif")),
+        (0,  [0x25,0x50,0x44,0x46],                      new(FileCategory.Pdf,        "PDF Document",      "application/pdf")),
+        (0,  [0x50,0x4B,0x03,0x04],                      new(FileCategory.Archive,    "ZIP Archive",       "application/zip")),
+        (0,  [0x50,0x4B,0x05,0x06],                      new(FileCategory.Archive,    "ZIP Archive",       "application/zip")),
+        (0,  [0x37,0x7A,0xBC,0xAF,0x27,0x1C],            new(FileCategory.Archive,    "7-Zip Archive")),
+        (0,  [0x52,0x61,0x72,0x21,0x1A,0x07],            new(FileCategory.Archive,    "RAR Archive")),
+        (0,  [0x7F,0x45,0x4C,0x46],                      new(FileCategory.Executable, "ELF Executable")),
+        (0,  [0x52,0x49,0x46,0x46],                      new(FileCategory.Binary,     "RIFF")),   // disambiguated in Detect
+        (4,  [0x66,0x74,0x79,0x70],                      new(FileCategory.Video,      "MP4 Video",         "video/mp4")), // ftyp box
+        (0,  [0x4D,0x5A],                                new(FileCategory.Executable, "PE Executable",     "application/x-msdownload")),
+        (0,  [0x49,0x44,0x33],                           new(FileCategory.Audio,      "MP3 Audio",         "audio/mpeg")),
+        (0,  [0x42,0x5A,0x68],                           new(FileCategory.Archive,    "BZip2 Archive")),
+        (0,  [0x1F,0x8B],                                new(FileCategory.Archive,    "GZip Archive",      "application/gzip")),
+        (0,  [0xFF,0xD8],                                new(FileCategory.Image,      "JPEG Image",        "image/jpeg")),
+        (0,  [0x42,0x4D],                                new(FileCategory.Image,      "BMP Image",         "image/bmp")),
+        (0,  [0xFF,0xFB],                                new(FileCategory.Audio,      "MP3 Audio",         "audio/mpeg")),
+        (0,  [0xFF,0xF3],                                new(FileCategory.Audio,      "MP3 Audio",         "audio/mpeg")),
+        (0,  [0xFF,0xF2],                                new(FileCategory.Audio,      "MP3 Audio",         "audio/mpeg")),
+    ];
+
+    private static readonly Dictionary<string, FileType> _extMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".txt"]  = new(FileCategory.Text, "Plain Text",       "text/plain"),
+        [".md"]   = new(FileCategory.Text, "Markdown",         "text/markdown"),
+        [".cs"]   = new(FileCategory.Text, "C# Source"),
+        [".js"]   = new(FileCategory.Text, "JavaScript"),
+        [".ts"]   = new(FileCategory.Text, "TypeScript"),
+        [".py"]   = new(FileCategory.Text, "Python Source"),
+        [".rb"]   = new(FileCategory.Text, "Ruby Source"),
+        [".go"]   = new(FileCategory.Text, "Go Source"),
+        [".rs"]   = new(FileCategory.Text, "Rust Source"),
+        [".c"]    = new(FileCategory.Text, "C Source"),
+        [".h"]    = new(FileCategory.Text, "C Header"),
+        [".cpp"]  = new(FileCategory.Text, "C++ Source"),
+        [".java"] = new(FileCategory.Text, "Java Source"),
+        [".json"] = new(FileCategory.Text, "JSON"),
+        [".xml"]  = new(FileCategory.Text, "XML"),
+        [".html"] = new(FileCategory.Text, "HTML"),
+        [".htm"]  = new(FileCategory.Text, "HTML"),
+        [".css"]  = new(FileCategory.Text, "CSS"),
+        [".sh"]   = new(FileCategory.Text, "Shell Script"),
+        [".bash"] = new(FileCategory.Text, "Shell Script"),
+        [".bat"]  = new(FileCategory.Text, "Batch Script"),
+        [".cmd"]  = new(FileCategory.Text, "Batch Script"),
+        [".ps1"]  = new(FileCategory.Text, "PowerShell Script"),
+        [".yaml"] = new(FileCategory.Text, "YAML"),
+        [".yml"]  = new(FileCategory.Text, "YAML"),
+        [".toml"] = new(FileCategory.Text, "TOML"),
+        [".ini"]  = new(FileCategory.Text, "INI Config"),
+        [".cfg"]  = new(FileCategory.Text, "Config File"),
+        [".conf"] = new(FileCategory.Text, "Config File"),
+        [".log"]  = new(FileCategory.Text, "Log File"),
+        [".csv"]  = new(FileCategory.Text, "CSV"),
+        [".sql"]  = new(FileCategory.Text, "SQL Script"),
+        [".svg"]  = new(FileCategory.Image, "SVG Image",       "image/svg+xml"),
+        [".ico"]  = new(FileCategory.Image, "Icon",            "image/x-icon"),
+        [".webp"] = new(FileCategory.Image, "WebP Image",      "image/webp"),
+        [".mp4"]  = new(FileCategory.Video, "MP4 Video",       "video/mp4"),
+        [".mov"]  = new(FileCategory.Video, "QuickTime Video", "video/quicktime"),
+        [".avi"]  = new(FileCategory.Video, "AVI Video",       "video/x-msvideo"),
+        [".wmv"]  = new(FileCategory.Video, "WMV Video",       "video/x-ms-wmv"),
+        [".webm"] = new(FileCategory.Video, "WebM Video",      "video/webm"),
+        [".mkv"]  = new(FileCategory.Video, "Matroska Video"),
+        [".flv"]  = new(FileCategory.Video, "Flash Video"),
+        [".wav"]  = new(FileCategory.Audio, "WAV Audio",       "audio/wav"),
+        [".mp3"]  = new(FileCategory.Audio, "MP3 Audio",       "audio/mpeg"),
+        [".flac"] = new(FileCategory.Audio, "FLAC Audio",      "audio/flac"),
+        [".aac"]  = new(FileCategory.Audio, "AAC Audio"),
+        [".m4a"]  = new(FileCategory.Audio, "M4A Audio"),
+        [".ogg"]  = new(FileCategory.Audio, "OGG Audio"),
+        [".opus"] = new(FileCategory.Audio, "Opus Audio"),
+        [".zip"]  = new(FileCategory.Archive, "ZIP Archive",   "application/zip"),
+        [".tar"]  = new(FileCategory.Archive, "TAR Archive"),
+        [".gz"]   = new(FileCategory.Archive, "GZip Archive",  "application/gzip"),
+        [".bz2"]  = new(FileCategory.Archive, "BZip2 Archive"),
+        [".xz"]   = new(FileCategory.Archive, "XZ Archive"),
+        [".7z"]   = new(FileCategory.Archive, "7-Zip Archive"),
+        [".rar"]  = new(FileCategory.Archive, "RAR Archive"),
+        [".exe"]  = new(FileCategory.Executable, "Executable"),
+        [".dll"]  = new(FileCategory.Executable, "DLL Library"),
+        [".sys"]  = new(FileCategory.Executable, "System Driver"),
+        [".pdf"]  = new(FileCategory.Pdf, "PDF Document"),
+        [".ttf"]  = new(FileCategory.Binary, "TrueType Font"),
+        [".otf"]  = new(FileCategory.Binary, "OpenType Font"),
+        [".woff"] = new(FileCategory.Binary, "Web Font"),
+        [".woff2"]= new(FileCategory.Binary, "Web Font"),
+    };
+
+    public static FileType Detect(string path, ReadOnlySpan<byte> magic)
+    {
+        foreach (var (offset, sig, type) in _sigs)
+        {
+            if (magic.Length < offset + sig.Length) continue;
+            bool match = true;
+            for (int i = 0; i < sig.Length && match; i++)
+                if (magic[offset + i] != sig[i]) match = false;
+            if (!match) continue;
+
+            // Disambiguate RIFF: check bytes 8-11 for form type
+            if (sig.Length == 4 && sig[0] == 0x52 && sig[1] == 0x49 && sig[2] == 0x46 && sig[3] == 0x46)
+            {
+                if (magic.Length < 12) return new(FileCategory.Binary, "RIFF Data");
+                if (magic[8]==0x41&&magic[9]==0x56&&magic[10]==0x49&&magic[11]==0x20)
+                    return new(FileCategory.Video, "AVI Video",  "video/x-msvideo");
+                if (magic[8]==0x57&&magic[9]==0x41&&magic[10]==0x56&&magic[11]==0x45)
+                    return new(FileCategory.Audio, "WAV Audio",  "audio/wav");
+                if (magic[8]==0x57&&magic[9]==0x45&&magic[10]==0x42&&magic[11]==0x50)
+                    return new(FileCategory.Image, "WebP Image", "image/webp");
+                return new(FileCategory.Binary, "RIFF Data");
+            }
+
+            // Refine MP4 ftyp: check brand at bytes 8-11
+            if (offset == 4 && sig[0] == 0x66 && magic.Length >= 12)
+            {
+                if (magic[8]==0x71&&magic[9]==0x74&&magic[10]==0x20&&magic[11]==0x20)
+                    return new(FileCategory.Video, "QuickTime Video", "video/quicktime");
+                if (magic[8]==0x4D&&magic[9]==0x34&&magic[10]==0x41&&magic[11]==0x20)
+                    return new(FileCategory.Audio, "M4A Audio", "audio/mp4");
+            }
+
+            // Refine MZ: use extension for dll/sys
+            if (sig[0] == 0x4D && sig[1] == 0x5A)
+            {
+                string e = System.IO.Path.GetExtension(path).ToLowerInvariant();
+                if (e == ".dll") return new(FileCategory.Executable, "DLL Library",    "application/x-msdownload");
+                if (e == ".sys") return new(FileCategory.Executable, "System Driver");
+            }
+
+            if (type.Label == "RIFF") continue;
+            return type;
+        }
+
+        string ext = System.IO.Path.GetExtension(path);
+        if (!string.IsNullOrEmpty(ext) && _extMap.TryGetValue(ext, out var extType))
+            return extType;
+
+        // Heuristic: check for null bytes — text files have none
+        if (magic.Length > 0)
+        {
+            int check = Math.Min(magic.Length, 512);
+            bool hasNull = false;
+            for (int i = 0; i < check; i++) if (magic[i] == 0) { hasNull = true; break; }
+            if (!hasNull) return new(FileCategory.Text, "Text File", "text/plain");
+        }
+
+        return new(FileCategory.Binary, "Binary Data", "application/octet-stream");
+    }
+}
 
 sealed class Line
 {
