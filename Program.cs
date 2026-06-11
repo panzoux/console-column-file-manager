@@ -532,7 +532,7 @@ static class Program
     {
         if (State.ActiveColumn < 0 || State.ActiveColumn >= Columns.Count) return false;
         Column c = Columns[State.ActiveColumn];
-        if (c.Entries.Count == 0) return false;
+        if (c.Selected < 0 || c.Selected >= c.Entries.Count) return false;
         string name = c.Entries[c.Selected];
         // Regular file (not a directory) OR a drive entry in the drives column
         if (!name.EndsWith("/")) return true;
