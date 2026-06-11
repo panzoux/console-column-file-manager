@@ -444,6 +444,7 @@ internal sealed class PreviewPane
     public void Cancel()
     {
         Cts?.Cancel();
+        Cts?.Dispose();
         Cts = null;
         IsLoading = false;
     }
@@ -1379,7 +1380,7 @@ static class Program
                 }
             }
             catch (OperationCanceledException) { }
-            catch { State.Preview.IsLoading = false; }
+            catch (Exception ex) { State.Preview.Content = new PreviewContent("Error", ex.Message, "", [], false); State.Preview.IsLoading = false; Draw(); }
         }, cts.Token);
     }
 
@@ -1838,6 +1839,7 @@ static class Program
             // Right column exists, just move to it
             State.ActiveColumn++;
             UpdateHorizontalScroll();
+            if (State.Preview.IsVisible) StartPreviewLoad();
         }
         else if (State.ActiveColumn < Columns.Count)
         {
@@ -1850,6 +1852,7 @@ static class Program
             {
                 State.ActiveColumn++;
                 UpdateHorizontalScroll();
+                if (State.Preview.IsVisible) StartPreviewLoad();
             }
         }
     }
