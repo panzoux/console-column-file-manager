@@ -628,21 +628,300 @@ internal static class PreviewLoader
         return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
     }
 
+    private static byte[] ReadHeader(string filePath, int bytes)
+    {
+        using var fs = File.OpenRead(filePath);
+        byte[] buf = new byte[Math.Min((int)fs.Length, bytes)];
+        fs.Read(buf, 0, buf.Length);
+        return buf;
+    }
+
     // ── Stubs (implemented in later tasks) ────────────────────────────────
     private static PreviewContent LoadDrive(string p, int w, int h)
         => new("Drive", "", "", [], false);
-    private static PreviewContent LoadImageMeta(string p, FileType t, string m, int w)
-        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
     private static PreviewContent LoadVideoMeta(string p, FileType t, string m, int w)
         => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
     private static PreviewContent LoadAudioMeta(string p, FileType t, string m, int w)
         => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
     private static Task<PreviewContent> LoadArchiveAsync(string p, FileType t, string m, int w, int h, CancellationToken ct)
         => Task.FromResult(new PreviewContent(t.Label, FormatSize(new FileInfo(p).Length), m, [], false));
-    private static PreviewContent LoadExecutable(string p, FileType t, string m, int w)
-        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
-    private static PreviewContent LoadPdf(string p, FileType t, string m, int w)
-        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
+
+    // ── Image metadata ────────────────────────────────────────────────────
+    private static PreviewContent LoadImageMeta(string filePath, FileType fileType, string modified, int width)
+    {
+        try
+        {
+            byte[] header = ReadHeader(filePath, 64);
+            string dims = "unknown dimensions";
+            string extra = "";
+
+            switch (fileType.Label)
+            {
+                case "PNG Image":
+                {
+                    var (w, h, bits, color) = ParsePngHeader(header);
+                    dims = $"{w} × {h} px";
+                    extra = $"{bits}-bit {color}";
+                    break;
+                }
+                case "JPEG Image":
+                {
+                    var (w, h) = ParseJpegDimensions(filePath);
+                    dims = $"{w} × {h} px";
+                    break;
+                }
+                case "GIF Image":
+                {
+                    var (w, h) = ParseGifHeader(header);
+                    dims = $"{w} × {h} px";
+                    break;
+                }
+                case "BMP Image":
+                {
+                    var (w, h) = ParseBmpHeader(header);
+                    dims = $"{w} × {h} px";
+                    break;
+                }
+                case "WebP Image":
+                {
+                    var (w, h) = ParseWebpHeader(header);
+                    dims = $"{w} × {h} px";
+                    break;
+                }
+                case "SVG Image":
+                {
+                    var (w, h) = ParseSvgDimensions(filePath);
+                    dims = string.IsNullOrEmpty(w) ? "vector (no size)" : $"{w} × {h}";
+                    break;
+                }
+            }
+
+            long size = new FileInfo(filePath).Length;
+            string info = string.IsNullOrEmpty(extra)
+                ? $"{dims} · {FormatSize(size)}"
+                : $"{dims} · {extra} · {FormatSize(size)}";
+            return new PreviewContent(fileType.Label, info, modified, [], false);
+        }
+        catch { return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false); }
+    }
+
+    internal static (int W, int H, int Bits, string Color) ParsePngHeader(byte[] h)
+    {
+        if (h.Length < 26) return (0, 0, 0, "");
+        int w     = (h[16]<<24)|(h[17]<<16)|(h[18]<<8)|h[19];
+        int ht    = (h[20]<<24)|(h[21]<<16)|(h[22]<<8)|h[23];
+        int bits  = h[24];
+        string color = h[25] switch { 0=>"Grayscale", 2=>"RGB", 3=>"Indexed", 4=>"Grayscale+A", 6=>"RGBA", _=>"?" };
+        return (w, ht, bits, color);
+    }
+
+    internal static (int W, int H) ParseGifHeader(byte[] h)
+    {
+        if (h.Length < 10) return (0, 0);
+        int w = h[6] | (h[7] << 8);
+        int ht = h[8] | (h[9] << 8);
+        return (w, ht);
+    }
+
+    internal static (int W, int H) ParseBmpHeader(byte[] h)
+    {
+        if (h.Length < 26) return (0, 0);
+        int w  = h[18]|(h[19]<<8)|(h[20]<<16)|(h[21]<<24);
+        int ht = h[22]|(h[23]<<8)|(h[24]<<16)|(h[25]<<24);
+        return (w, Math.Abs(ht));
+    }
+
+    private static (int W, int H) ParseWebpHeader(byte[] h)
+    {
+        // VP8 : bytes 26-27 = width-1, 28-29 = height-1 (14-bit LE)
+        if (h.Length < 30) return (0, 0);
+        if (h[12]==0x56&&h[13]==0x50&&h[14]==0x38&&h[15]==0x20) // "VP8 "
+        {
+            int w = 1 + ((h[26]|(h[27]<<8)) & 0x3FFF);
+            int ht= 1 + ((h[28]|(h[29]<<8)) & 0x3FFF);
+            return (w, ht);
+        }
+        return (0, 0);
+    }
+
+    private static (int W, int H) ParseJpegDimensions(string filePath)
+    {
+        using var fs = File.OpenRead(filePath);
+        byte[] buf = new byte[2];
+        if (fs.Read(buf, 0, 2) < 2 || buf[0] != 0xFF || buf[1] != 0xD8) return (0, 0);
+        while (fs.Position < fs.Length - 9)
+        {
+            if (fs.ReadByte() != 0xFF) continue;
+            int marker = fs.ReadByte();
+            bool isSof = marker == 0xC0 || marker == 0xC1 || marker == 0xC2
+                       || marker == 0xC9 || marker == 0xCA;
+            if (fs.Read(buf, 0, 2) < 2) break;
+            int segLen = (buf[0] << 8) | buf[1];
+            if (isSof)
+            {
+                byte[] sof = new byte[5];
+                if (fs.Read(sof, 0, 5) < 5) break;
+                int h = (sof[1] << 8) | sof[2];
+                int w = (sof[3] << 8) | sof[4];
+                return (w, h);
+            }
+            fs.Seek(segLen - 2, SeekOrigin.Current);
+        }
+        return (0, 0);
+    }
+
+    private static (string W, string H) ParseSvgDimensions(string filePath)
+    {
+        try
+        {
+            byte[] buf = new byte[1024];
+            using var fs = File.OpenRead(filePath);
+            int read = fs.Read(buf, 0, buf.Length);
+            string text = System.Text.Encoding.UTF8.GetString(buf, 0, read);
+            string w = ExtractAttr(text, "width");
+            string h = ExtractAttr(text, "height");
+            return (w, h);
+        }
+        catch { return ("", ""); }
+    }
+
+    private static string ExtractAttr(string text, string attr)
+    {
+        int idx = text.IndexOf(attr + "=\"", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return "";
+        int start = idx + attr.Length + 2;
+        int end = text.IndexOf('"', start);
+        return end > start ? text[start..end] : "";
+    }
+
+    // ── PDF ───────────────────────────────────────────────────────────────
+    private static PreviewContent LoadPdf(string filePath, FileType fileType, string modified, int width)
+    {
+        byte[] header = ReadHeader(filePath, 512);
+        string version = ParsePdfVersion(header);
+        int pages = CountPdfPages(filePath);
+        string title = ReadPdfInfoField(filePath, "Title");
+        string author = ReadPdfInfoField(filePath, "Author");
+
+        var body = new List<string>();
+        if (!string.IsNullOrEmpty(title))  body.Add(CharacterWidth.SmartTruncate($"Title:  {title}", width - 1));
+        if (!string.IsNullOrEmpty(author)) body.Add(CharacterWidth.SmartTruncate($"Author: {author}", width - 1));
+
+        long size = new FileInfo(filePath).Length;
+        string pageStr = pages > 0 ? $"{pages} pages" : "? pages";
+        string info = $"PDF {version} · {pageStr} · {FormatSize(size)}";
+        return new PreviewContent(fileType.Label, info, modified, [.. body], false);
+    }
+
+    internal static string ParsePdfVersion(byte[] header)
+    {
+        string text = System.Text.Encoding.ASCII.GetString(header, 0, Math.Min(header.Length, 16));
+        int idx = text.IndexOf("%PDF-", StringComparison.Ordinal);
+        if (idx < 0) return "?";
+        int start = idx + 5;
+        int end = start;
+        while (end < text.Length && (char.IsDigit(text[end]) || text[end] == '.')) end++;
+        return end > start ? text[start..end] : "?";
+    }
+
+    private static int CountPdfPages(string filePath)
+    {
+        try
+        {
+            long length = new FileInfo(filePath).Length;
+            int scanSize = (int)Math.Min(65536, length);
+            byte[] buf = new byte[scanSize];
+            using var fs = File.OpenRead(filePath);
+            fs.Seek(-scanSize, SeekOrigin.End);
+            fs.Read(buf, 0, scanSize);
+            string tail = System.Text.Encoding.Latin1.GetString(buf);
+            int best = 0, idx = 0;
+            while ((idx = tail.IndexOf("/Count ", idx, StringComparison.Ordinal)) >= 0)
+            {
+                idx += 7;
+                int end = idx;
+                while (end < tail.Length && char.IsDigit(tail[end])) end++;
+                if (end > idx && int.TryParse(tail[idx..end], out int n) && n > best) best = n;
+            }
+            return best;
+        }
+        catch { return 0; }
+    }
+
+    private static string ReadPdfInfoField(string filePath, string fieldName)
+    {
+        try
+        {
+            long length = new FileInfo(filePath).Length;
+            int scanSize = (int)Math.Min(131072, length);
+            byte[] buf = new byte[scanSize];
+            using var fs = File.OpenRead(filePath);
+            fs.Seek(-scanSize, SeekOrigin.End);
+            fs.Read(buf, 0, scanSize);
+            string tail = System.Text.Encoding.Latin1.GetString(buf);
+            string key = "/" + fieldName + " (";
+            int idx = tail.LastIndexOf(key, StringComparison.Ordinal);
+            if (idx < 0) return "";
+            int start = idx + key.Length;
+            int end = tail.IndexOf(')', start);
+            return end > start ? tail[start..end].Trim() : "";
+        }
+        catch { return ""; }
+    }
+
+    // ── PE Executable ─────────────────────────────────────────────────────
+    private static PreviewContent LoadExecutable(string filePath, FileType fileType, string modified, int width)
+    {
+        try
+        {
+            byte[] header = ReadHeader(filePath, 512);
+            if (header.Length < 64 || header[0] != 0x4D || header[1] != 0x5A)
+                return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false);
+
+            int peOffset = header[60]|(header[61]<<8)|(header[62]<<16)|(header[63]<<24);
+            if (peOffset + 24 >= header.Length)
+                header = ReadHeader(filePath, peOffset + 256);
+            if (peOffset + 24 >= header.Length)
+                return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false);
+
+            if (header[peOffset]!=0x50||header[peOffset+1]!=0x45)
+                return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false);
+
+            int machine = header[peOffset+4]|(header[peOffset+5]<<8);
+            string arch = machine switch
+            {
+                0x014C => "x86",
+                0x8664 => "x86-64",
+                0xAA64 => "ARM64",
+                0x01C4 => "ARM",
+                _ => $"0x{machine:X4}"
+            };
+
+            int optMagic = header[peOffset+24]|(header[peOffset+25]<<8);
+            int subOffset = peOffset + 92;
+            int subsystem = subOffset + 1 < header.Length
+                ? header[subOffset]|(header[subOffset+1]<<8) : 0;
+            string sub = subsystem switch
+            {
+                2 => "GUI",
+                3 => "Console",
+                1 => "Native/Driver",
+                _ => $"sub={subsystem}"
+            };
+
+            bool isDotNet = false;
+            int ddOffset = optMagic == 0x20B ? peOffset + 136 : peOffset + 128;
+            int clrDirOffset = ddOffset + 14 * 8;
+            if (clrDirOffset + 4 < header.Length)
+                isDotNet = (header[clrDirOffset]|(header[clrDirOffset+1]<<8)|(header[clrDirOffset+2]<<16)|(header[clrDirOffset+3]<<24)) != 0;
+
+            long size = new FileInfo(filePath).Length;
+            string dotnet = isDotNet ? " · .NET" : "";
+            string info = $"{arch} · {sub}{dotnet} · {FormatSize(size)}";
+            return new PreviewContent(fileType.Label, info, modified, [], false);
+        }
+        catch { return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false); }
+    }
 }
 
 static class Program
