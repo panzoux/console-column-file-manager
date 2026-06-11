@@ -51,7 +51,7 @@ internal static class FileTypeDetector
         (0,  [0x37,0x7A,0xBC,0xAF,0x27,0x1C],            new(FileCategory.Archive,    "7-Zip Archive")),
         (0,  [0x52,0x61,0x72,0x21,0x1A,0x07],            new(FileCategory.Archive,    "RAR Archive")),
         (0,  [0x7F,0x45,0x4C,0x46],                      new(FileCategory.Executable, "ELF Executable")),
-        (0,  [0x52,0x49,0x46,0x46],                      new(FileCategory.Binary,     "RIFF")),   // disambiguated in Detect
+        // RIFF is handled by dedicated early-return before the loop
         (4,  [0x66,0x74,0x79,0x70],                      new(FileCategory.Video,      "MP4 Video",         "video/mp4")), // ftyp box
         (0,  [0x4D,0x5A],                                new(FileCategory.Executable, "PE Executable",     "application/x-msdownload")),
         (0,  [0x49,0x44,0x33],                           new(FileCategory.Audio,      "MP3 Audio",         "audio/mpeg")),
@@ -134,6 +134,19 @@ internal static class FileTypeDetector
 
     public static FileType Detect(string path, ReadOnlySpan<byte> magic)
     {
+        // Disambiguate RIFF before general table scan
+        if (magic.Length >= 4 && magic[0]==0x52&&magic[1]==0x49&&magic[2]==0x46&&magic[3]==0x46)
+        {
+            if (magic.Length < 12) return new(FileCategory.Binary, "RIFF Data");
+            if (magic[8]==0x41&&magic[9]==0x56&&magic[10]==0x49&&magic[11]==0x20)
+                return new(FileCategory.Video, "AVI Video",  "video/x-msvideo");
+            if (magic[8]==0x57&&magic[9]==0x41&&magic[10]==0x56&&magic[11]==0x45)
+                return new(FileCategory.Audio, "WAV Audio",  "audio/wav");
+            if (magic[8]==0x57&&magic[9]==0x45&&magic[10]==0x42&&magic[11]==0x50)
+                return new(FileCategory.Image, "WebP Image", "image/webp");
+            return new(FileCategory.Binary, "RIFF Data");
+        }
+
         foreach (var (offset, sig, type) in _sigs)
         {
             if (magic.Length < offset + sig.Length) continue;
@@ -141,19 +154,6 @@ internal static class FileTypeDetector
             for (int i = 0; i < sig.Length && match; i++)
                 if (magic[offset + i] != sig[i]) match = false;
             if (!match) continue;
-
-            // Disambiguate RIFF: check bytes 8-11 for form type
-            if (sig.Length == 4 && sig[0] == 0x52 && sig[1] == 0x49 && sig[2] == 0x46 && sig[3] == 0x46)
-            {
-                if (magic.Length < 12) return new(FileCategory.Binary, "RIFF Data");
-                if (magic[8]==0x41&&magic[9]==0x56&&magic[10]==0x49&&magic[11]==0x20)
-                    return new(FileCategory.Video, "AVI Video",  "video/x-msvideo");
-                if (magic[8]==0x57&&magic[9]==0x41&&magic[10]==0x56&&magic[11]==0x45)
-                    return new(FileCategory.Audio, "WAV Audio",  "audio/wav");
-                if (magic[8]==0x57&&magic[9]==0x45&&magic[10]==0x42&&magic[11]==0x50)
-                    return new(FileCategory.Image, "WebP Image", "image/webp");
-                return new(FileCategory.Binary, "RIFF Data");
-            }
 
             // Refine MP4 ftyp: check brand at bytes 8-11
             if (offset == 4 && sig[0] == 0x66 && magic.Length >= 12)
@@ -172,7 +172,6 @@ internal static class FileTypeDetector
                 if (e == ".sys") return new(FileCategory.Executable, "System Driver");
             }
 
-            if (type.Label == "RIFF") continue;
             return type;
         }
 
@@ -420,6 +419,33 @@ sealed class ScreenState
     public string[]? PrevFrame;
     public int PrevWidth;
     public int PrevHeight;
+    public readonly PreviewPane Preview = new();
+}
+
+internal record PreviewContent(
+    string   TypeLabel,
+    string   InfoLine,
+    string   Modified,
+    string[] BodyLines,
+    bool     IsPartial,
+    string?  ExtMismatch = null   // set when magic-detected type ≠ extension type
+);
+
+internal sealed class PreviewPane
+{
+    public bool IsVisible;
+    public string? CurrentPath;
+    public FileType? CurrentType;
+    public PreviewContent? Content;
+    public bool IsLoading;
+    public CancellationTokenSource? Cts;
+
+    public void Cancel()
+    {
+        Cts?.Cancel();
+        Cts = null;
+        IsLoading = false;
+    }
 }
 
 static class Program
@@ -500,6 +526,34 @@ static class Program
     {
         return System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
             System.Runtime.InteropServices.OSPlatform.Windows);
+    }
+
+    static bool SelectedItemIsFileOrDrive()
+    {
+        if (State.ActiveColumn < 0 || State.ActiveColumn >= Columns.Count) return false;
+        Column c = Columns[State.ActiveColumn];
+        if (c.Entries.Count == 0) return false;
+        string name = c.Entries[c.Selected];
+        // Regular file (not a directory) OR a drive entry in the drives column
+        if (!name.EndsWith("/")) return true;
+        if (c.Path == "::DRIVES::") return true;
+        return false;
+    }
+
+    static (string Path, bool IsDrive)? GetPreviewTarget()
+    {
+        if (!SelectedItemIsFileOrDrive()) return null;
+        Column c = Columns[State.ActiveColumn];
+        string name = c.Entries[c.Selected];
+
+        if (c.Path == "::DRIVES::")
+        {
+            // "C:/" → "C:\"
+            string drivePath = name.TrimEnd('/') + "\\";
+            return (drivePath, true);
+        }
+
+        return (System.IO.Path.Combine(c.Path, name), false);
     }
 
     static async Task HandleSpecialKeyAsync(ConsoleKeyInfo key)
