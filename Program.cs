@@ -910,7 +910,7 @@ internal static class PreviewLoader
             };
 
             bool isDotNet = false;
-            int ddOffset = optMagic == 0x20B ? peOffset + 136 : peOffset + 128;
+            int ddOffset = optMagic == 0x20B ? peOffset + 136 : peOffset + 120;
             int clrDirOffset = ddOffset + 14 * 8;
             if (clrDirOffset + 4 < header.Length)
                 isDotNet = (header[clrDirOffset]|(header[clrDirOffset+1]<<8)|(header[clrDirOffset+2]<<16)|(header[clrDirOffset+3]<<24)) != 0;
