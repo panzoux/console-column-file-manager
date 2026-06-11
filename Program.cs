@@ -636,15 +636,297 @@ internal static class PreviewLoader
         return buf;
     }
 
-    // ── Stubs (implemented in later tasks) ────────────────────────────────
-    private static PreviewContent LoadDrive(string p, int w, int h)
-        => new("Drive", "", "", [], false);
-    private static PreviewContent LoadVideoMeta(string p, FileType t, string m, int w)
-        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
-    private static PreviewContent LoadAudioMeta(string p, FileType t, string m, int w)
-        => new(t.Label, FormatSize(new FileInfo(p).Length), m, [], false);
-    private static Task<PreviewContent> LoadArchiveAsync(string p, FileType t, string m, int w, int h, CancellationToken ct)
-        => Task.FromResult(new PreviewContent(t.Label, FormatSize(new FileInfo(p).Length), m, [], false));
+    private static string FormatDuration(double seconds)
+    {
+        var ts = TimeSpan.FromSeconds(seconds);
+        return ts.Hours > 0
+            ? $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+    }
+
+    // ── Audio metadata ────────────────────────────────────────────────────
+    private static PreviewContent LoadAudioMeta(string filePath, FileType fileType, string modified, int width)
+    {
+        try
+        {
+            byte[] header = ReadHeader(filePath, 512);
+            string info = fileType.Label switch
+            {
+                "WAV Audio"  => ParseWavInfo(header, filePath),
+                "FLAC Audio" => ParseFlacInfo(header),
+                "MP3 Audio"  => ParseMp3Info(header, filePath),
+                _ => FormatSize(new FileInfo(filePath).Length)
+            };
+            return new PreviewContent(fileType.Label, info, modified, [], false);
+        }
+        catch { return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false); }
+    }
+
+    private static string ParseWavInfo(byte[] h, string filePath)
+    {
+        // RIFF/WAVE fmt  chunk at standard offset:
+        // offset 22 = channels (LE16), 24 = sampleRate (LE32), 28 = byteRate (LE32),
+        // 34 = bitsPerSample (LE16), 40 = data chunk size (LE32)
+        if (h.Length < 44) return FormatSize(new FileInfo(filePath).Length);
+        int channels      = h[22]|(h[23]<<8);
+        int sampleRate    = h[24]|(h[25]<<8)|(h[26]<<16)|(h[27]<<24);
+        int byteRate      = h[28]|(h[29]<<8)|(h[30]<<16)|(h[31]<<24);
+        int bitsPerSample = h[34]|(h[35]<<8);
+        long dataBytes    = h[40]|((long)h[41]<<8)|((long)h[42]<<16)|((long)h[43]<<24);
+        double seconds    = byteRate > 0 ? (double)dataBytes / byteRate : 0;
+        string dur = FormatDuration(seconds);
+        string ch  = channels == 1 ? "Mono" : channels == 2 ? "Stereo" : $"{channels}ch";
+        return $"{dur} · {sampleRate / 1000.0:F1} kHz · {ch} · {bitsPerSample}-bit";
+    }
+
+    private static string ParseFlacInfo(byte[] h)
+    {
+        // STREAMINFO block: after 4-byte "fLaC" marker
+        // byte 4 = block type (0 = STREAMINFO), bytes 5-7 = length
+        // bytes 18-21: sample rate (20 bits BE), channels (3 bits), bitsPerSample-1 (5 bits)
+        // bytes 21-25: total samples (36 bits)
+        if (h.Length < 38) return "";
+        int sampleRate = (h[18]<<12)|(h[19]<<4)|(h[20]>>4);
+        int channels   = ((h[20]>>1) & 0x07) + 1;
+        int bits       = (((h[20]&0x01)<<4)|(h[21]>>4)) + 1;
+        long samples   = ((long)(h[21]&0x0F)<<32)|(long)(h[22]<<24)|(long)(h[23]<<16)|(long)(h[24]<<8)|h[25];
+        double seconds = sampleRate > 0 ? (double)samples / sampleRate : 0;
+        string dur = FormatDuration(seconds);
+        string ch  = channels == 1 ? "Mono" : channels == 2 ? "Stereo" : $"{channels}ch";
+        return $"{dur} · {sampleRate / 1000.0:F1} kHz · {ch} · {bits}-bit";
+    }
+
+    private static string ParseMp3Info(byte[] h, string filePath)
+    {
+        long fileSize = new FileInfo(filePath).Length;
+        int bitrate = 0;
+        for (int i = 0; i < h.Length - 3; i++)
+        {
+            if (h[i] != 0xFF || (h[i+1] & 0xE0) != 0xE0) continue;
+            int b3 = h[i+2];
+            int brIdx = (b3 >> 4) & 0x0F;
+            int[] table = [0,32,40,48,56,64,80,96,112,128,160,192,224,256,320,0];
+            bitrate = table[brIdx] * 1000;
+            break;
+        }
+        double seconds = bitrate > 0 ? (fileSize * 8.0) / bitrate : 0;
+        string dur = seconds > 0 ? FormatDuration(seconds) : "unknown duration";
+        return bitrate > 0 ? $"{dur} · {bitrate/1000} kbps" : $"{dur} · {FormatSize(fileSize)}";
+    }
+
+    // ── Video metadata ────────────────────────────────────────────────────
+    private static PreviewContent LoadVideoMeta(string filePath, FileType fileType, string modified, int width)
+    {
+        try
+        {
+            string info = fileType.Label switch
+            {
+                "MP4 Video" or "QuickTime Video" or "M4A Audio" => ParseMp4Info(filePath),
+                "AVI Video" => ParseAviInfo(filePath),
+                _ => FormatSize(new FileInfo(filePath).Length)
+            };
+            return new PreviewContent(fileType.Label, info, modified, [], false);
+        }
+        catch { return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false); }
+    }
+
+    private static string ParseMp4Info(string filePath)
+    {
+        long fileSize = new FileInfo(filePath).Length;
+        double duration = 0;
+        int vidW = 0, vidH = 0;
+        using var fs = File.OpenRead(filePath);
+        WalkMp4Boxes(fs, fs.Length, ref duration, ref vidW, ref vidH, 0);
+        var parts = new List<string>();
+        if (vidW > 0 && vidH > 0) parts.Add($"{vidW} × {vidH}");
+        if (duration > 0) parts.Add(FormatDuration(duration));
+        parts.Add(FormatSize(fileSize));
+        return string.Join(" · ", parts);
+    }
+
+    private static void WalkMp4Boxes(Stream s, long limit, ref double duration, ref int w, ref int h, int depth)
+    {
+        if (depth > 6) return;
+        byte[] buf = new byte[8];
+        while (s.Position < limit - 8)
+        {
+            long boxStart = s.Position;
+            if (s.Read(buf, 0, 8) < 8) return;
+            long size = (long)(uint)((buf[0]<<24)|(buf[1]<<16)|(buf[2]<<8)|buf[3]);
+            string type = System.Text.Encoding.ASCII.GetString(buf, 4, 4);
+            if (size == 1)
+            {
+                byte[] ext = new byte[8];
+                s.Read(ext, 0, 8);
+                size = (long)((ulong)((ext[0]<<24)|(ext[1]<<16)|(ext[2]<<8)|ext[3]) << 32
+                            | (ulong)((ext[4]<<24)|(ext[5]<<16)|(ext[6]<<8)|ext[7]));
+            }
+            if (size < 8) return;
+            long contentStart = s.Position;
+            long boxEnd = boxStart + size;
+
+            if (type == "moov" || type == "trak")
+            {
+                WalkMp4Boxes(s, boxEnd, ref duration, ref w, ref h, depth + 1);
+                s.Seek(boxEnd, SeekOrigin.Begin);
+                continue;
+            }
+            if (type == "mvhd" && duration == 0)
+            {
+                byte[] mvhd = new byte[Math.Min(28, (int)(boxEnd - contentStart))];
+                s.Read(mvhd, 0, mvhd.Length);
+                int ver = mvhd[0];
+                long ts, dur;
+                if (ver == 1)
+                {
+                    ts  = (long)(((ulong)(mvhd[4]<<24|mvhd[5]<<16|mvhd[6]<<8|mvhd[7]))<<32 | (ulong)(mvhd[8]<<24|mvhd[9]<<16|mvhd[10]<<8|mvhd[11]));
+                    dur = (long)(((ulong)(mvhd[12]<<24|mvhd[13]<<16|mvhd[14]<<8|mvhd[15]))<<32 | (ulong)(mvhd[16]<<24|mvhd[17]<<16|mvhd[18]<<8|mvhd[19]));
+                }
+                else
+                {
+                    ts  = (uint)(mvhd[4]<<24|mvhd[5]<<16|mvhd[6]<<8|mvhd[7]);
+                    dur = (uint)(mvhd[8]<<24|mvhd[9]<<16|mvhd[10]<<8|mvhd[11]);
+                }
+                if (ts > 0) duration = (double)dur / ts;
+            }
+            if (type == "tkhd" && w == 0)
+            {
+                byte[] tkhd = new byte[Math.Min(100, (int)(boxEnd - contentStart))];
+                s.Read(tkhd, 0, tkhd.Length);
+                int off = tkhd[0] == 1 ? 92 : 76;
+                if (tkhd.Length >= off + 8)
+                {
+                    w = (tkhd[off]<<8)|tkhd[off+1];
+                    h = (tkhd[off+4]<<8)|tkhd[off+5];
+                }
+            }
+            s.Seek(boxEnd, SeekOrigin.Begin);
+        }
+    }
+
+    private static string ParseAviInfo(string filePath)
+    {
+        // AVI layout: RIFF(0) filesize(4) "AVI "(8) LIST(12) listsize(16) "hdrl"(20)
+        //   "avih"(24) chunksize(28)  avih-data(32):
+        //   usPerFrame(32) maxBytesPerSec(36) padding(40) flags(44) totalFrames(48)
+        //   initialFrames(52) streams(56) bufferSize(60) width(64) height(68)
+        long fileSize = new FileInfo(filePath).Length;
+        byte[] h = ReadHeader(filePath, 72);
+        if (h.Length < 72) return FormatSize(fileSize);
+        if (h[24]!=0x61||h[25]!=0x76||h[26]!=0x69||h[27]!=0x68) return FormatSize(fileSize); // "avih"
+        long usPerFrame  = h[32]|(h[33]<<8)|(long)(h[34]<<16)|(long)(h[35]<<24);
+        long totalFrames = h[48]|(h[49]<<8)|(long)(h[50]<<16)|(long)(h[51]<<24);
+        int  vidW        = h[64]|(h[65]<<8)|(h[66]<<16)|(h[67]<<24);
+        int  vidH        = h[68]|(h[69]<<8)|(h[70]<<16)|(h[71]<<24);
+        double fps     = usPerFrame > 0 ? 1_000_000.0 / usPerFrame : 0;
+        double seconds = fps > 0 && totalFrames > 0 ? totalFrames / fps : 0;
+        var parts = new List<string>();
+        if (vidW > 0 && vidH > 0) parts.Add($"{vidW} × {vidH}");
+        if (seconds > 0) parts.Add(FormatDuration(seconds));
+        parts.Add(FormatSize(fileSize));
+        return string.Join(" · ", parts);
+    }
+
+    // ── Archive metadata ──────────────────────────────────────────────────
+    private static async Task<PreviewContent> LoadArchiveAsync(
+        string filePath, FileType fileType, string modified,
+        int width, int bodyHeight, CancellationToken ct)
+    {
+        try
+        {
+            long size = new FileInfo(filePath).Length;
+            switch (fileType.Label)
+            {
+                case "ZIP Archive":
+                    return await LoadZipAsync(filePath, fileType, modified, size, width, bodyHeight, ct);
+                case "GZip Archive":
+                {
+                    string orig = ReadGzipOriginalName(filePath);
+                    string info = string.IsNullOrEmpty(orig)
+                        ? FormatSize(size)
+                        : $"{orig} · {FormatSize(size)}";
+                    return new PreviewContent(fileType.Label, info, modified, [], false);
+                }
+                default:
+                    return new PreviewContent(fileType.Label, FormatSize(size), modified, [], false);
+            }
+        }
+        catch { return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false); }
+    }
+
+    private static async Task<PreviewContent> LoadZipAsync(
+        string filePath, FileType fileType, string modified,
+        long size, int width, int bodyHeight, CancellationToken ct)
+    {
+        await Task.Yield();
+        using var za = System.IO.Compression.ZipFile.OpenRead(filePath);
+        int total = za.Entries.Count;
+        var body = new List<string>(Math.Min(total, bodyHeight));
+        foreach (var entry in za.Entries)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (body.Count >= bodyHeight) break;
+            string name = CharacterWidth.SmartTruncate(entry.FullName, width - 12);
+            string entSize = FormatSize(entry.Length).PadLeft(9);
+            body.Add($"  {name.PadRight(width - 13)}{entSize}");
+        }
+        string info = $"{total} entries · {FormatSize(size)}";
+        return new PreviewContent(fileType.Label, info, modified, [.. body], false);
+    }
+
+    private static string ReadGzipOriginalName(string filePath)
+    {
+        byte[] h = ReadHeader(filePath, 256);
+        if (h.Length < 10) return "";
+        byte flags = h[3];
+        if ((flags & 0x08) == 0) return "";
+        int pos = 10;
+        if ((flags & 0x04) != 0) { if (pos + 2 > h.Length) return ""; int xlen = h[pos]|(h[pos+1]<<8); pos += 2 + xlen; }
+        var name = new System.Text.StringBuilder();
+        while (pos < h.Length && h[pos] != 0) { name.Append((char)h[pos]); pos++; }
+        return name.ToString();
+    }
+
+    // ── Drive info ────────────────────────────────────────────────────────
+    private static PreviewContent LoadDrive(string drivePath, int width, int bodyHeight)
+    {
+        var di = new DriveInfo(drivePath);
+        if (!di.IsReady)
+            return new PreviewContent("Drive", "Not ready", "", [], false);
+
+        long total = di.TotalSize;
+        long free  = di.AvailableFreeSpace;
+        long used  = total - free;
+        double pct = total > 0 ? (double)used / total : 0;
+
+        int barWidth = Math.Max(4, width - 8);
+        int filled = (int)(pct * barWidth);
+        string bar = new string('█', filled) + new string('░', barWidth - filled);
+
+        string driveType = di.DriveType switch
+        {
+            DriveType.Fixed      => "Fixed Drive",
+            DriveType.Removable  => "Removable Drive",
+            DriveType.Network    => "Network Drive",
+            DriveType.CDRom      => "Optical Drive",
+            DriveType.Ram        => "RAM Disk",
+            _ => "Drive"
+        };
+
+        var body = new List<string>
+        {
+            $"Label:      {(string.IsNullOrEmpty(di.VolumeLabel) ? "(none)" : di.VolumeLabel)}",
+            $"Filesystem: {di.DriveFormat}",
+            $"Total:      {FormatSize(total)}",
+            $"Used:       {FormatSize(used)} ({pct:P0})",
+            $"Free:       {FormatSize(free)}",
+            "",
+            bar + $" {pct:P0}"
+        };
+
+        string typeLabel = $"{di.DriveFormat} · {driveType}";
+        return new PreviewContent(typeLabel, "", "", [.. body], false);
+    }
 
     // ── Image metadata ────────────────────────────────────────────────────
     private static PreviewContent LoadImageMeta(string filePath, FileType fileType, string modified, int width)
