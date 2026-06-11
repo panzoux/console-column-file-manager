@@ -664,15 +664,25 @@ internal static class PreviewLoader
 
     private static string ParseWavInfo(byte[] h, string filePath)
     {
-        // RIFF/WAVE fmt  chunk at standard offset:
-        // offset 22 = channels (LE16), 24 = sampleRate (LE32), 28 = byteRate (LE32),
-        // 34 = bitsPerSample (LE16), 40 = data chunk size (LE32)
-        if (h.Length < 44) return FormatSize(new FileInfo(filePath).Length);
+        // RIFF/WAVE: read fmt chunk dynamically to find data offset
+        // Standard RIFF header: "RIFF"(0) size(4) "WAVE"(8)
+        // offset 12 = "fmt "(ASCII) or other chunks
+        // offset 16 = fmt chunk size (LE32), then the fmt data follows
+        if (h.Length < 20) return FormatSize(new FileInfo(filePath).Length);
+
+        // Try to read fmt chunk size from standard offset (WAVE files often have fmt at 12)
+        int fmtChunkSize = h[16]|(h[17]<<8)|(h[18]<<16)|(h[19]<<24);
+        int dataOffset = 20 + fmtChunkSize + 8; // skip fmt data + "data" tag (4) + chunk size (4)
+
+        if (h.Length < dataOffset + 4) return FormatSize(new FileInfo(filePath).Length);
+
+        // Extract fmt parameters from the fmt chunk (always at offset 20 after the size field)
         int channels      = h[22]|(h[23]<<8);
         int sampleRate    = h[24]|(h[25]<<8)|(h[26]<<16)|(h[27]<<24);
         int byteRate      = h[28]|(h[29]<<8)|(h[30]<<16)|(h[31]<<24);
         int bitsPerSample = h[34]|(h[35]<<8);
-        long dataBytes    = h[40]|((long)h[41]<<8)|((long)h[42]<<16)|((long)h[43]<<24);
+
+        long dataBytes    = h[dataOffset]|((long)h[dataOffset+1]<<8)|((long)h[dataOffset+2]<<16)|((long)h[dataOffset+3]<<24);
         double seconds    = byteRate > 0 ? (double)dataBytes / byteRate : 0;
         string dur = FormatDuration(seconds);
         string ch  = channels == 1 ? "Mono" : channels == 2 ? "Stereo" : $"{channels}ch";
@@ -689,7 +699,7 @@ internal static class PreviewLoader
         int sampleRate = (h[18]<<12)|(h[19]<<4)|(h[20]>>4);
         int channels   = ((h[20]>>1) & 0x07) + 1;
         int bits       = (((h[20]&0x01)<<4)|(h[21]>>4)) + 1;
-        long samples   = ((long)(h[21]&0x0F)<<32)|(long)(h[22]<<24)|(long)(h[23]<<16)|(long)(h[24]<<8)|h[25];
+        long samples   = ((long)(h[21]&0x0F)<<32)|((long)h[22]<<24)|((long)h[23]<<16)|((long)h[24]<<8)|h[25];
         double seconds = sampleRate > 0 ? (double)samples / sampleRate : 0;
         string dur = FormatDuration(seconds);
         string ch  = channels == 1 ? "Mono" : channels == 2 ? "Stereo" : $"{channels}ch";
@@ -758,8 +768,8 @@ internal static class PreviewLoader
             {
                 byte[] ext = new byte[8];
                 s.Read(ext, 0, 8);
-                size = (long)((ulong)((ext[0]<<24)|(ext[1]<<16)|(ext[2]<<8)|ext[3]) << 32
-                            | (ulong)((ext[4]<<24)|(ext[5]<<16)|(ext[6]<<8)|ext[7]));
+                size = (long)(((ulong)ext[0]<<56)|((ulong)ext[1]<<48)|((ulong)ext[2]<<40)|((ulong)ext[3]<<32)
+                            | ((ulong)ext[4]<<24)|((ulong)ext[5]<<16)|((ulong)ext[6]<<8)|(ulong)ext[7]);
             }
             if (size < 8) return;
             long contentStart = s.Position;
@@ -779,13 +789,15 @@ internal static class PreviewLoader
                 long ts, dur;
                 if (ver == 1)
                 {
-                    ts  = (long)(((ulong)(mvhd[4]<<24|mvhd[5]<<16|mvhd[6]<<8|mvhd[7]))<<32 | (ulong)(mvhd[8]<<24|mvhd[9]<<16|mvhd[10]<<8|mvhd[11]));
-                    dur = (long)(((ulong)(mvhd[12]<<24|mvhd[13]<<16|mvhd[14]<<8|mvhd[15]))<<32 | (ulong)(mvhd[16]<<24|mvhd[17]<<16|mvhd[18]<<8|mvhd[19]));
+                    ts  = (long)(((ulong)mvhd[4]<<56)|((ulong)mvhd[5]<<48)|((ulong)mvhd[6]<<40)|((ulong)mvhd[7]<<32)
+                               | ((ulong)mvhd[8]<<24)|((ulong)mvhd[9]<<16)|((ulong)mvhd[10]<<8)|(ulong)mvhd[11]);
+                    dur = (long)(((ulong)mvhd[12]<<56)|((ulong)mvhd[13]<<48)|((ulong)mvhd[14]<<40)|((ulong)mvhd[15]<<32)
+                               | ((ulong)mvhd[16]<<24)|((ulong)mvhd[17]<<16)|((ulong)mvhd[18]<<8)|(ulong)mvhd[19]);
                 }
                 else
                 {
-                    ts  = (uint)(mvhd[4]<<24|mvhd[5]<<16|mvhd[6]<<8|mvhd[7]);
-                    dur = (uint)(mvhd[8]<<24|mvhd[9]<<16|mvhd[10]<<8|mvhd[11]);
+                    ts  = (uint)((uint)mvhd[4]<<24|(uint)mvhd[5]<<16|(uint)mvhd[6]<<8|(uint)mvhd[7]);
+                    dur = (uint)((uint)mvhd[8]<<24|(uint)mvhd[9]<<16|(uint)mvhd[10]<<8|(uint)mvhd[11]);
                 }
                 if (ts > 0) duration = (double)dur / ts;
             }
@@ -814,8 +826,8 @@ internal static class PreviewLoader
         byte[] h = ReadHeader(filePath, 72);
         if (h.Length < 72) return FormatSize(fileSize);
         if (h[24]!=0x61||h[25]!=0x76||h[26]!=0x69||h[27]!=0x68) return FormatSize(fileSize); // "avih"
-        long usPerFrame  = h[32]|(h[33]<<8)|(long)(h[34]<<16)|(long)(h[35]<<24);
-        long totalFrames = h[48]|(h[49]<<8)|(long)(h[50]<<16)|(long)(h[51]<<24);
+        long usPerFrame  = (long)h[32]|((long)h[33]<<8)|((long)h[34]<<16)|((long)h[35]<<24);
+        long totalFrames = (long)h[48]|((long)h[49]<<8)|((long)h[50]<<16)|((long)h[51]<<24);
         int  vidW        = h[64]|(h[65]<<8)|(h[66]<<16)|(h[67]<<24);
         int  vidH        = h[68]|(h[69]<<8)|(h[70]<<16)|(h[71]<<24);
         double fps     = usPerFrame > 0 ? 1_000_000.0 / usPerFrame : 0;
@@ -900,7 +912,7 @@ internal static class PreviewLoader
         double pct = total > 0 ? (double)used / total : 0;
 
         int barWidth = Math.Max(4, width - 8);
-        int filled = (int)(pct * barWidth);
+        int filled = Math.Min((int)(pct * barWidth), barWidth);
         string bar = new string('█', filled) + new string('░', barWidth - filled);
 
         string driveType = di.DriveType switch
