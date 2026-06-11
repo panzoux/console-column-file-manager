@@ -581,6 +581,8 @@ internal static class PreviewLoader
             lineCount++;
             if (bodyLines.Count < bodyHeight)
                 bodyLines.Add(CharacterWidth.SmartTruncate(line, width - 1));
+            if (lineCount >= maxCountLines && bodyLines.Count >= bodyHeight)
+                break;
         }
 
         string lineInfo = lineCount >= maxCountLines ? $"> {maxCountLines} lines" : $"{lineCount} lines";
@@ -605,7 +607,7 @@ internal static class PreviewLoader
         string[] hexLines = FormatHexLines(data, bytesPerRow, width);
 
         long size = new FileInfo(filePath).Length;
-        string infoLine = $"{FormatSize(size)}";
+        string infoLine = FormatSize(size);
         return new PreviewContent(fileType.Label, infoLine, modified, hexLines, false);
     }
 
@@ -624,14 +626,6 @@ internal static class PreviewLoader
         if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
         if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
         return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
-    }
-
-    private static string[] TruncateLines(IEnumerable<string> lines, int width)
-    {
-        var result = new List<string>();
-        foreach (var l in lines)
-            result.Add(CharacterWidth.SmartTruncate(l, width - 1));
-        return [.. result];
     }
 
     // ── Stubs (implemented in later tasks) ────────────────────────────────
