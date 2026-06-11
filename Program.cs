@@ -224,8 +224,9 @@ sealed class Line
 
 static class AnsiColors
 {
-    public const string Blue = "\x1b[34m";
-    public const string Reset = "\x1b[0m";
+    public const string Blue   = "\x1b[34m";
+    public const string Yellow = "\x1b[33m";
+    public const string Reset  = "\x1b[0m";
     public static string Colorize(string text, string color) => color + text + Reset;
 }
 
@@ -2233,7 +2234,72 @@ static class Program
         }
     }
 
+    static void DrawPreviewToLines(Line[] lines, PreviewContent content, int startX, int previewWidth, int frameHeight)
+    {
+        int visibleHeight = frameHeight - 3; // same as column body height
 
+        static string Spinner(int tick) => (tick / 4 % 8) switch
+        { 0=>"⠋", 1=>"⠙", 2=>"⠹", 3=>"⠸", 4=>"⠼", 5=>"⠴", 6=>"⠦", 7=>"⠧", _=>"⠋" };
+
+        // Row 0: type label
+        string headerLabel = CharacterWidth.SmartTruncate(content.TypeLabel, previewWidth - 1);
+        int headerW = CharacterWidth.GetStringWidth(headerLabel);
+        lines[0].AddColumn(headerLabel, headerW, previewWidth);
+
+        if (visibleHeight < 1) return;
+
+        // Row 1: info line (size / dimensions / duration etc.)
+        if (!string.IsNullOrEmpty(content.InfoLine))
+        {
+            string info = CharacterWidth.SmartTruncate(content.InfoLine, previewWidth - 1);
+            int infoW = CharacterWidth.GetStringWidth(info);
+            string infoColored = AnsiColors.Colorize(info, AnsiColors.Yellow);
+            lines[1].AddColumn(infoColored, infoW, previewWidth);
+        }
+        else
+            lines[1].AddColumn("", 0, previewWidth);
+
+        // Row 2: modified date
+        if (!string.IsNullOrEmpty(content.Modified))
+        {
+            string mod = CharacterWidth.SmartTruncate(content.Modified, previewWidth - 1);
+            lines[2].AddColumn(mod, CharacterWidth.GetStringWidth(mod), previewWidth);
+        }
+        else
+            lines[2].AddColumn("", 0, previewWidth);
+
+        // Row 3: divider
+        if (visibleHeight >= 3)
+        {
+            string divider = new string('─', previewWidth - 1);
+            lines[3].AddColumn(divider, CharacterWidth.GetStringWidth(divider), previewWidth);
+        }
+
+        // Row 4 (optional): extension mismatch warning
+        int bodyStart = 4;
+        if (!string.IsNullOrEmpty(content.ExtMismatch) && visibleHeight >= bodyStart)
+        {
+            string warn = CharacterWidth.SmartTruncate(content.ExtMismatch, previewWidth - 1);
+            string warnColored = AnsiColors.Colorize(warn, AnsiColors.Yellow);
+            lines[bodyStart].AddColumn(warnColored, CharacterWidth.GetStringWidth(warn), previewWidth);
+            bodyStart = 5;
+        }
+
+        // Body lines
+        for (int i = 0; i < visibleHeight - bodyStart + 1 && i < content.BodyLines.Length; i++)
+        {
+            int row = bodyStart + i;
+            if (row >= visibleHeight + 1) break;
+            string bodyLine = CharacterWidth.SmartTruncate(content.BodyLines[i], previewWidth - 1);
+            int bodyW = CharacterWidth.GetStringWidth(bodyLine);
+            lines[row].AddColumn(bodyLine, bodyW, previewWidth);
+        }
+
+        // Fill remaining rows with empty cells
+        int lastBodyRow = bodyStart + Math.Min(content.BodyLines.Length, visibleHeight - bodyStart + 1);
+        for (int i = lastBodyRow; i < visibleHeight + 1; i++)
+            lines[i].AddColumn("", 0, previewWidth);
+    }
 
 
     static void WriteLineAt(int x, int y, string text)
