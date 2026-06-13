@@ -1077,9 +1077,9 @@ internal static class PreviewLoader
             ct.ThrowIfCancellationRequested();
 
             // pixel columns = previewWidth - 1  (separator takes 1 col)
-            // pixel rows    = bodyHeight * 2    (each terminal row = 2 pixel rows via ▄)
+            // pixel rows    = (bodyHeight-1) * 2  (DrawPreviewToLines draws bodyHeight-1 body rows)
             int pixelCols = width - 1;
-            int pixelRows = bodyHeight * 2;
+            int pixelRows = (bodyHeight - 1) * 2;
 
             // ImageSharp is CPU-bound; run on thread pool to stay async
             var (pixelLines, pixelWidth) = await Task.Run(() =>
