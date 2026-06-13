@@ -31,6 +31,9 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 internal enum FileCategory { Text, Image, Video, Audio, Archive, Executable, Pdf, Drive, Binary }
 
