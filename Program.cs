@@ -1016,6 +1016,103 @@ internal static class PreviewLoader
         catch { return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false); }
     }
 
+    // ── Image pixel rendering ─────────────────────────────────────────────
+    internal static string[] RenderPixelLines(Image<Rgba32> image, int tgtW, int tgtH)
+    {
+        // image is already resized to tgtW × tgtH by the caller
+        int termRows = tgtH / 2;
+        string[] lines = new string[termRows];
+        var sb = new StringBuilder(tgtW * 42);
+
+        for (int row = 0; row < termRows; row++)
+        {
+            sb.Clear();
+            int upperY = row * 2;
+            int lowerY = upperY + 1;
+
+            for (int x = 0; x < tgtW; x++)
+            {
+                Rgba32 up = image[x, upperY];
+                Rgba32 lo = image[x, lowerY];
+
+                // Alpha-blend against black background
+                byte upR = (byte)(up.R * up.A / 255);
+                byte upG = (byte)(up.G * up.A / 255);
+                byte upB = (byte)(up.B * up.A / 255);
+                byte loR = (byte)(lo.R * lo.A / 255);
+                byte loG = (byte)(lo.G * lo.A / 255);
+                byte loB = (byte)(lo.B * lo.A / 255);
+
+                // Upper pixel row → ANSI background; lower → foreground; char = ▄
+                sb.Append("\x1b[48;2;");
+                sb.Append(upR); sb.Append(';');
+                sb.Append(upG); sb.Append(';');
+                sb.Append(upB); sb.Append('m');
+                sb.Append("\x1b[38;2;");
+                sb.Append(loR); sb.Append(';');
+                sb.Append(loG); sb.Append(';');
+                sb.Append(loB); sb.Append('m');
+                sb.Append('▄');
+            }
+
+            sb.Append("\x1b[0m");
+            lines[row] = sb.ToString();
+        }
+
+        return lines;
+    }
+
+    internal static async Task<PreviewContent> LoadImagePreviewAsync(
+        string filePath, FileType fileType, string modified, int width, int bodyHeight, CancellationToken ct)
+    {
+        // Always get metadata first — InfoLine (dimensions + size) comes from LoadImageMeta
+        var meta = LoadImageMeta(filePath, fileType, modified, width);
+
+        // SVG and ICO cannot be rasterized by ImageSharp (no bundled rasterizer)
+        if (fileType.Label == "SVG Image" || fileType.Label == "Icon")
+            return meta;
+
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // pixel columns = previewWidth - 1  (separator takes 1 col)
+            // pixel rows    = bodyHeight * 2    (each terminal row = 2 pixel rows via ▄)
+            int pixelCols = width - 1;
+            int pixelRows = bodyHeight * 2;
+
+            // ImageSharp is CPU-bound; run on thread pool to stay async
+            var (pixelLines, pixelWidth) = await Task.Run(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                using var image = Image.Load<Rgba32>(filePath);
+                ct.ThrowIfCancellationRequested();
+
+                int srcW = image.Width;
+                int srcH = image.Height;
+                double scaleX = pixelCols > 0 ? (double)pixelCols / srcW : 1.0;
+                double scaleY = pixelRows > 0 ? (double)pixelRows / srcH : 1.0;
+                double scale  = Math.Min(scaleX, scaleY);
+                int tgtW = Math.Max(1, (int)(srcW * scale));
+                int tgtH = Math.Max(2, (int)(srcH * scale));
+                if (tgtH % 2 != 0) tgtH--;
+
+                image.Mutate(ctx => ctx.Resize(tgtW, tgtH));
+                string[] lines = RenderPixelLines(image, tgtW, tgtH);
+                return (lines, tgtW);
+            }, ct);
+
+            ct.ThrowIfCancellationRequested();
+            return meta with { PixelLines = pixelLines, PixelWidth = pixelWidth };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch
+        {
+            // Corrupted file, unsupported sub-format, etc. → fall back to metadata only
+            return meta;
+        }
+    }
+
     internal static (int W, int H, int Bits, string Color) ParsePngHeader(byte[] h)
     {
         if (h.Length < 26) return (0, 0, 0, "");
