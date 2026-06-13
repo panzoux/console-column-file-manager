@@ -1,0 +1,71 @@
+<h2>Preview Pane Layout</h2>
+<p class="subtitle">When a file is selected, where does the preview appear and how wide is it?</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <pre style="font-family:monospace;font-size:11px;line-height:1.4;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:4px;margin:0;overflow:hidden">┌──────────────┬──────────────┬──────────────┬──────────────┐
+│ <span style="color:#4ec9b0">Drives</span>       │ <span style="color:#4ec9b0">C:\</span>          │ <span style="color:#4ec9b0">Users</span>        │ <span style="color:#ce9178">▓ Preview ▓▓▓</span>│
+├──────────────┼──────────────┼──────────────┼──────────────┤
+│ C:\          │ Program Files│ <span style="color:#569cd6">Desktop/</span>     │ <span style="color:#ce9178">readme.txt</span>   │
+│ D:\          │ Users/       │ <span style="color:#ce9178">> readme.txt</span> │              │
+│ E:\          │ Windows/     │ photo.jpg    │ <span style="color:#dcdcaa">txt • 2.4 KB</span> │
+│              │ pagefile.sys │ video.mp4    │ Modified:    │
+│              │              │ archive.zip  │ 2026-01-15   │
+│              │              │              │              │
+│              │              │              │ Hello World! │
+│              │              │              │ This is a    │
+│              │              │              │ readme file. │
+│              │              │              │ Line 4...    │
+└──────────────┴──────────────┴──────────────┴──────────────┘</pre>
+    </div>
+    <div class="card-body">
+      <h3>A — Fixed width (same as columns)</h3>
+      <p>Preview pane is exactly one column wide (32 chars). Clean and uniform. Limited space for content — text wraps aggressively. Works in narrow terminals.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <pre style="font-family:monospace;font-size:11px;line-height:1.4;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:4px;margin:0;overflow:hidden">┌──────────────┬──────────────┬──────────────┬──────────────────────────────┐
+│ <span style="color:#4ec9b0">Drives</span>       │ <span style="color:#4ec9b0">C:\</span>          │ <span style="color:#4ec9b0">Users</span>        │ <span style="color:#ce9178">▓▓▓▓▓▓ Preview ▓▓▓▓▓▓▓▓▓▓▓▓▓</span>│
+├──────────────┼──────────────┼──────────────┼──────────────────────────────┤
+│ C:\          │ Program Files│ <span style="color:#569cd6">Desktop/</span>     │ <span style="color:#ce9178">readme.txt</span>  <span style="color:#dcdcaa">txt • 2.4 KB</span>    │
+│ D:\          │ Users/       │ <span style="color:#ce9178">> readme.txt</span> │ Modified: 2026-01-15 09:32   │
+│ E:\          │ Windows/     │ photo.jpg    │ ──────────────────────────── │
+│              │ pagefile.sys │ video.mp4    │ Hello World!                 │
+│              │              │ archive.zip  │ This is a sample readme.     │
+│              │              │              │ It has several lines of text  │
+│              │              │              │ that demonstrate the preview  │
+│              │              │              │ wrapping behavior nicely here.│
+│              │              │              │ Line 9 of the file content.  │
+└──────────────┴──────────────┴──────────────┴──────────────────────────────┘</pre>
+    </div>
+    <div class="card-body">
+      <h3>B — Full remaining width (recommended)</h3>
+      <p>Preview pane expands to fill ALL remaining terminal width. More room for text content, hex dumps, image info. Hides automatically if remaining width &lt; 30 chars.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <pre style="font-family:monospace;font-size:11px;line-height:1.4;background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:4px;margin:0;overflow:hidden">┌──────────────┬──────────────┬───────────────────────────────────────────┐
+│ <span style="color:#4ec9b0">Drives</span>       │ <span style="color:#4ec9b0">C:\</span>          │ <span style="color:#ce9178">▓▓▓▓▓▓▓▓▓▓▓▓▓▓ Preview ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓</span>│
+├──────────────┼──────────────┼───────────────────────────────────────────┤
+│ C:\          │ Program Files│ <span style="color:#569cd6">readme.txt</span>  <span style="color:#dcdcaa">Plain Text • 2.4 KB</span>          │
+│ D:\          │ <span style="color:#ce9178">> Users/</span>     │ C:\Users\readme.txt                       │
+│ E:\          │ Windows/     │ Modified: 2026-01-15 09:32  Read-only: No │
+│              │ pagefile.sys │ ─────────────────────────────────────────│
+│              │              │ Hello World!                              │
+│              │              │ This is a sample readme file.             │
+│              │              │ Demonstrating wider preview pane layout.  │
+│              │              │ More text fits without wrapping.          │
+│              │              │ Line 5 of the file content shown here.   │
+└──────────────┴──────────────┴───────────────────────────────────────────┘</pre>
+    </div>
+    <div class="card-body">
+      <h3>C — Split: preview replaces rightmost dir column</h3>
+      <p>When a directory is selected, preview appears to the right at full remaining width. Fewer visible directory columns, but maximum preview space. Better for wide terminals.</p>
+    </div>
+  </div>
+</div>

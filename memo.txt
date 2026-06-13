@@ -1,0 +1,2 @@
+## publish
+dotnet publish -c Release -p:PublishAot=true /p:TrimMode=link -o ./publish

@@ -122,6 +122,8 @@ internal static class FileTypeDetector
         [".xz"]   = new(FileCategory.Archive, "XZ Archive"),
         [".7z"]   = new(FileCategory.Archive, "7-Zip Archive"),
         [".rar"]  = new(FileCategory.Archive, "RAR Archive"),
+        [".lzh"]  = new(FileCategory.Archive, "LZH Archive"),
+        [".lha"]  = new(FileCategory.Archive, "LZH Archive"),
         [".exe"]  = new(FileCategory.Executable, "Executable"),
         [".dll"]  = new(FileCategory.Executable, "DLL Library"),
         [".sys"]  = new(FileCategory.Executable, "System Driver"),
@@ -389,6 +391,7 @@ sealed class Column
     public List<string> Entries;
     public int Selected;
     public int ScrollOffset;
+    public string? RestoreTo;
     public Dictionary<string, List<string>> CachedChildren;
     public DateTime CachedTime;
 
@@ -466,7 +469,7 @@ internal static class PreviewLoader
         var extOnly = FileTypeDetector.Detect(filePath, ReadOnlySpan<byte>.Empty);
         if (extOnly.Category == FileCategory.Binary) return null; // extension unknown
 
-        if (extOnly.Category != detected.Category)
+        if (extOnly.Category != detected.Category || extOnly.Label != detected.Label)
             return $"⚠ {ext} extension but detected as {detected.Label}";
         return null;
     }
@@ -498,6 +501,13 @@ internal static class PreviewLoader
                 FileCategory.Pdf       => LoadPdf(filePath, fileType, modified, width),
                 _                      => await LoadBinaryAsync(filePath, fileType, modified, width, bodyHeight, ct),
             };
+
+            // If type-specific loader produced no body content, fall back to hex dump
+            if (content.BodyLines.Length == 0)
+            {
+                var hex = await LoadBinaryAsync(filePath, fileType, modified, width, bodyHeight, ct);
+                content = content with { BodyLines = hex.BodyLines };
+            }
 
             return mismatch != null ? content with { ExtMismatch = mismatch } : content;
         }
@@ -1232,6 +1242,10 @@ static class Program
     static DateTime _lastNavigationTime = DateTime.MinValue;
     static string? _lastErrorMessage = null;
 
+    static readonly Dictionary<string, string> _cursorMemory = new(StringComparer.OrdinalIgnoreCase);
+    static readonly List<string> _cursorMemoryKeys = new();
+    const int CursorMemoryLimit = 1000;
+
     static async Task Main()
     {
         try
@@ -1250,6 +1264,7 @@ static class Program
 
             while (true)
             {
+                HandleResizeIfNeeded();
                 Draw();
 
                 if (!Console.KeyAvailable)
@@ -1262,11 +1277,6 @@ static class Program
 
                 switch (key.KeyChar)
                 {
-                    case 'r':
-                    case 'R':
-                        RefreshCurrent();
-                        break;
-
                     case (char)27: // Esc
                         Console.Clear();
                         try { Console.CursorVisible = true; } catch { }
@@ -1328,16 +1338,32 @@ static class Program
         return (System.IO.Path.Combine(c.Path, name), false);
     }
 
-    static void StartPreviewLoad()
+    static void StartPreviewLoad(bool forceReload = false)
     {
+        if (!State.Preview.IsVisible) return;
+
+        // Empty-directory placeholder — show a clean message instead of trying to open a non-existent path
+        if (State.ActiveColumn >= 0 && State.ActiveColumn < Columns.Count)
+        {
+            Column col = Columns[State.ActiveColumn];
+            if (col.Selected >= 0 && col.Selected < col.Entries.Count && col.Entries[col.Selected] == "<No file>")
+            {
+                State.Preview.Cancel();
+                State.Preview.CurrentPath = null;
+                State.Preview.Content = new PreviewContent("No preview", "Empty folder", "", [], false);
+                State.Preview.IsLoading = false;
+                return;
+            }
+        }
+
         var target = GetPreviewTarget();
-        if (target == null || !State.Preview.IsVisible) return;
+        if (target == null) return;
 
         string path = target.Value.Path;
         bool isDrive = target.Value.IsDrive;
 
-        // Skip reload if already showing this path
-        if (State.Preview.CurrentPath == path && State.Preview.Content != null && !State.Preview.IsLoading)
+        // Skip reload if already showing this path at current dimensions
+        if (!forceReload && State.Preview.CurrentPath == path && State.Preview.Content != null && !State.Preview.IsLoading)
             return;
 
         State.Preview.Cancel();
@@ -1368,8 +1394,6 @@ static class Program
         int drawnCols = 0;
         for (int i = State.HorizontalScroll; i < Columns.Count && (drawnCols + 1) * ColumnWidth <= termWidth; i++)
             drawnCols++;
-        // Leave one slot for the preview (matching BuildFrame's behavior when preview is shown)
-        if (drawnCols > 0) drawnCols--;
         int width = Math.Max(ColumnWidth, termWidth - drawnCols * ColumnWidth);
         int height = Console.WindowHeight;
 
@@ -1382,11 +1406,11 @@ static class Program
                 {
                     State.Preview.Content = content;
                     State.Preview.IsLoading = false;
-                    Draw();
+                    // No Draw() here — main loop polls every 50 ms and picks up the new content
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { State.Preview.Content = new PreviewContent("Error", ex.Message, "", [], false); State.Preview.IsLoading = false; Draw(); }
+            catch (Exception ex) { State.Preview.Content = new PreviewContent("Error", ex.Message, "", [], false); State.Preview.IsLoading = false; }
         }, cts.Token);
     }
 
@@ -1441,6 +1465,15 @@ static class Program
                         CancelPreviewLoad();
                     Draw();
                 }
+                break;
+
+            case ConsoleKey.L:
+                if ((key.Modifiers & ConsoleModifiers.Control) != 0)
+                    RefreshCurrent();
+                break;
+
+            case ConsoleKey.F5:
+                RefreshCurrent();
                 break;
         }
     }
@@ -1524,6 +1557,7 @@ static class Program
             {
             }
             column.IsLoading = false;
+            ApplyCursorMemory(column);
             return Task.FromResult(column);
         }
 
@@ -1537,6 +1571,7 @@ static class Program
         column.EntriesRead = 0;
         column.DirectoriesCount = 0;
         column.ReadCts = new CancellationTokenSource();
+        ApplyCursorMemory(column);
 
         column.LoadingTask = Task.Run(async () =>
         {
@@ -1669,6 +1704,7 @@ static class Program
                     column.Entries.Add("<No file>");
                 }
                 column.IsLoading = false;
+                SeekRestoreTo(column);
             }
         }, ct);
 
@@ -1740,6 +1776,8 @@ static class Program
             if (c.Selected < c.ScrollOffset)
                 c.ScrollOffset = c.Selected;
 
+            UpdateHorizontalScroll();
+
             // Reset debounce timer on every cursor move, rebuild if cursor stable for 300ms
             if (IsNavigationDebounced())
             {
@@ -1767,6 +1805,8 @@ static class Program
             // Auto-scroll
             if (c.Selected >= c.ScrollOffset + visibleHeight)
                 c.ScrollOffset = c.Selected - visibleHeight + 1;
+
+            UpdateHorizontalScroll();
 
             // Reset debounce timer on every cursor move, rebuild if cursor stable for 300ms
             if (IsNavigationDebounced())
@@ -1810,7 +1850,17 @@ static class Program
         string? currentSelection = GetSelectedDirectory(columnIndex);
 
         if (currentSelection == null)
-            return;  // Cursor on file, no right pane needed
+        {
+            // Cursor on file — prune any stale right columns left over from previous selection
+            while (Columns.Count > columnIndex + 1)
+            {
+                Column col = Columns[Columns.Count - 1];
+                col.ReadCts?.Cancel();
+                SaveCursorMemory(col);
+                Columns.RemoveAt(Columns.Count - 1);
+            }
+            return;
+        }
 
         if (Columns.Count <= columnIndex + 1)
         {
@@ -1868,11 +1918,12 @@ static class Program
         bool previewTakesSlot = State.Preview.IsVisible && SelectedItemIsFileOrDrive();
         int visibleColumns = Math.Max(1, Console.WindowWidth / ColumnWidth - (previewTakesSlot ? 1 : 0));
 
-        if (State.ActiveColumn < State.HorizontalScroll)
-            State.HorizontalScroll = State.ActiveColumn;
+        // Keep active column visible
+        int minHS = Math.Max(0, State.ActiveColumn - visibleColumns + 1);
+        // Fill from right — don't leave empty column slots when left columns could fill them
+        int maxHS = Math.Max(0, Columns.Count - visibleColumns);
 
-        if (State.ActiveColumn >= State.HorizontalScroll + visibleColumns)
-            State.HorizontalScroll = State.ActiveColumn - visibleColumns + 1;
+        State.HorizontalScroll = Math.Max(minHS, Math.Min(State.HorizontalScroll, maxHS));
     }
 
     static async Task EnterAsync()
@@ -2022,14 +2073,50 @@ static class Program
         if (State.Preview.IsVisible) StartPreviewLoad();
     }
 
+    static void SaveCursorMemory(Column col)
+    {
+        if (col.Selected < 0 || col.Selected >= col.Entries.Count) return;
+        string entry = col.Entries[col.Selected];
+        if (entry == "<No file>") return;
+        if (!_cursorMemory.ContainsKey(col.Path))
+        {
+            if (_cursorMemoryKeys.Count >= CursorMemoryLimit)
+            {
+                _cursorMemory.Remove(_cursorMemoryKeys[0]);
+                _cursorMemoryKeys.RemoveAt(0);
+            }
+            _cursorMemoryKeys.Add(col.Path);
+        }
+        _cursorMemory[col.Path] = entry;
+    }
+
+    static void ApplyCursorMemory(Column col)
+    {
+        if (!_cursorMemory.TryGetValue(col.Path, out string? target)) return;
+        col.RestoreTo = target;
+        SeekRestoreTo(col);
+    }
+
+    static void SeekRestoreTo(Column col)
+    {
+        if (col.RestoreTo == null) return;
+        for (int i = 0; i < col.Entries.Count; i++)
+        {
+            if (col.Entries[i] == col.RestoreTo)
+            {
+                col.Selected = i;
+                col.RestoreTo = null;
+                return;
+            }
+        }
+    }
+
     static void RefreshCurrent()
     {
         Column c = Columns[State.ActiveColumn];
         c.CachedChildren.Clear();
         c.CachedTime = DateTime.UtcNow.AddMilliseconds(-CacheExpireMs - 1);
         c.ReadCts?.Cancel();
-
-        // Re-read current column and refresh right side
         _ = RefreshCurrentAsync();
     }
 
@@ -2038,11 +2125,13 @@ static class Program
         Column current = Columns[State.ActiveColumn];
         string currentPath = current.Path;
 
-        // Re-read current directory
+        SaveCursorMemory(current);
+
         Column refreshed = await CreateColumnAsync(currentPath, CancellationToken.None);
+        if (refreshed.LoadingTask != null)
+            await refreshed.LoadingTask;
         Columns[State.ActiveColumn] = refreshed;
 
-        // Rebuild right side based on refreshed column
         await RebuildRightSideAsync(State.ActiveColumn);
     }
 
@@ -2072,8 +2161,8 @@ static class Program
         while (Columns.Count > columnIndex + 1)
         {
             Column col = Columns[Columns.Count - 1];
-            // Cancel any ongoing reads
             col.ReadCts?.Cancel();
+            SaveCursorMemory(col);
             Columns.RemoveAt(Columns.Count - 1);
         }
 
@@ -2082,6 +2171,8 @@ static class Program
         while (nextPath != null)
         {
             Column next = await CreateColumnAsync(nextPath, CancellationToken.None);
+            if (next.LoadingTask != null)
+                await next.LoadingTask;
             Columns.Add(next);
 
             nextPath = GetSelectedDirectory(Columns.Count - 1);
@@ -2139,18 +2230,39 @@ static class Program
         return null;
     }
 
+    static void HandleResizeIfNeeded()
+    {
+        int w = Console.WindowWidth;
+        int h = Console.WindowHeight;
+        if (w <= 0 || h <= 0) return;
+        if (w == State.PrevWidth && h == State.PrevHeight) return;
+
+        State.PrevWidth = w;
+        State.PrevHeight = h;
+        State.PrevFrame = null; // force full redraw in Draw()
+
+        UpdateHorizontalScroll();
+
+        // Clamp every column's scroll offset for the new height
+        int visibleHeight = Math.Max(1, h - 3);
+        for (int i = 0; i < Columns.Count; i++)
+        {
+            Column col = Columns[i];
+            if (col.ScrollOffset < 0)
+                col.ScrollOffset = 0;
+            if (col.Selected >= col.ScrollOffset + visibleHeight)
+                col.ScrollOffset = col.Selected - visibleHeight + 1;
+        }
+
+        // Reload preview at new dimensions (cancels any in-flight load, bypasses same-path guard)
+        if (State.Preview.IsVisible)
+            StartPreviewLoad(forceReload: true);
+    }
+
     static void Draw()
     {
         int width = Console.WindowWidth;
         int height = Console.WindowHeight;
-
-        // Resize detection
-        if (width != State.PrevWidth || height != State.PrevHeight)
-        {
-            State.PrevFrame = null;
-            State.PrevWidth = width;
-            State.PrevHeight = height;
-        }
 
         string[] currentFrame = BuildFrame(width, height);
 
@@ -2189,9 +2301,11 @@ static class Program
 
         int displayX = 0;
         int drawnColumnsWidth = 0;
+        // Reserve one ColumnWidth slot for the preview pane when it will be shown
+        int columnDrawLimit = showPreview ? width - ColumnWidth : width;
 
         for (int i = State.HorizontalScroll;
-             i < Columns.Count && displayX + ColumnWidth <= width;
+             i < Columns.Count && displayX + ColumnWidth <= columnDrawLimit;
              i++)
         {
             bool isFirstVisible = (i == State.HorizontalScroll);
@@ -2229,8 +2343,8 @@ static class Program
         fullPath = CharacterWidth.SmartTruncate(fullPath, width);
         frame[height - 2] = CharacterWidth.PadToWidth(fullPath, width);
 
-        // Override status with preview-hidden hint if applicable
-        if (State.Preview.IsVisible && !showPreview && Console.WindowWidth > 0)
+        // Override status with preview-hidden hint only when terminal width is the limiting factor
+        if (State.Preview.IsVisible && SelectedItemIsFileOrDrive() && Console.WindowWidth < ColumnWidth * 2)
         {
             _lastErrorMessage = "[preview hidden: narrow terminal]";
         }
@@ -2244,10 +2358,11 @@ static class Program
         }
         else
         {
+            string previewHint = State.Preview.IsVisible ? "Shift+V=Preview[on]" : "Shift+V=Preview[off]";
             if (IsWindows())
-                status = "Esc=Quit | ↑↓=Select | ←→=Column | Enter=Open | Ctrl+Enter=Open | Shift+Enter=Menu | Bksp=Parent | R=Refresh";
+                status = $"Esc=Quit | Ctrl+Enter=Open | Shift+Enter=Menu | Ctrl+L/F5=Refresh | {previewHint}";
             else
-                status = "Esc=Quit | ↑↓=Select | ←→=Column | Enter=Open | Ctrl+Enter=Open File | Bksp=Parent | R=Refresh";
+                status = $"Esc=Quit | Ctrl+Enter=Open File | Ctrl+L/F5=Refresh | {previewHint}";
         }
         status = CharacterWidth.SmartTruncate(status, width);
         frame[height - 1] = CharacterWidth.PadToWidth(status, width);

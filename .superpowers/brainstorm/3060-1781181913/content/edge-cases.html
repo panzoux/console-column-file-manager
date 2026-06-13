@@ -1,0 +1,74 @@
+<h2>Preview pane — edge cases &amp; adaptive layout</h2>
+<p class="subtitle">How the preview behaves at different terminal widths and minimum sizes</p>
+
+<style>
+.term-box { font-family: monospace; font-size: 10px; background: #1a1a1a; color: #ccc; padding: 10px 12px; border-radius: 4px; line-height: 1.5; white-space: pre; overflow: hidden; margin: 8px 0; }
+.section { margin-bottom: 24px; }
+.label { font-size: 11px; font-weight: bold; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+.formula { font-family: monospace; font-size: 12px; background: var(--surface); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); margin: 4px 0; display: inline-block; }
+.note { font-size: 12px; color: var(--text-muted); margin: 4px 0; }
+h3 { margin: 0 0 6px 0; }
+</style>
+
+<div class="section">
+  <h3>a) File at the rightmost column — preview replaces the "would-be next" slot</h3>
+  <p class="note">When a file is selected, columns are pruned to the right. The preview takes slot N+1 (32 chars) + all remaining. This means when preview is active, we show <strong>one fewer dir column</strong> to make that slot available.</p>
+  <div class="formula">visibleDirCols = floor(termWidth / colWidth) − 1</div>
+  <div class="formula">previewWidth   = termWidth − (visibleDirCols × colWidth)</div>
+</div>
+
+<div class="section">
+  <h3>b) Width breakpoints</h3>
+  <div class="label">≥ 96 wide — comfortable (e.g. 120: 2 dir cols + 56-char preview)</div>
+  <div class="term-box">│ <span style="color:#4ec9b0">C:\</span>          │ <span style="color:#4ec9b0">Users</span>        │ <span style="color:#ce9178">clip.mp4</span>   <span style="color:#dcdcaa">MP4 Video • 87 MB</span>       │
+│ Desktop/     │ <span style="color:#ce9178">> clip.mp4</span>   │ Modified: 2026-02-10 18:55      │
+│ readme.txt   │ photo.jpg    │ Dimensions: 1920 × 1080 px      │
+│ photos/      │ music/       │ Duration:   00:03:42            │</div>
+
+  <div class="label">64–95 wide — narrow (e.g. 64: 1 dir col + 32-char preview)</div>
+  <div class="term-box">│ <span style="color:#4ec9b0">Users</span>        │ <span style="color:#ce9178">clip.mp4</span>   <span style="color:#dcdcaa">MP4 • 87 MB</span>  │
+│ <span style="color:#ce9178">> clip.mp4</span>   │ 1920 × 1080 px              │
+│ photo.jpg    │ Duration: 00:03:42          │
+│ music/       │                             │</div>
+
+  <div class="label">&lt; 64 wide — preview hidden automatically (not enough room for 1 col + useful preview)</div>
+  <div class="term-box">│ <span style="color:#4ec9b0">Users</span>        │ <span style="color:#569cd6">Desktop/</span>     │
+│ Desktop/     │ readme.txt   │
+│ <span style="color:#ce9178">> readme.txt</span> │              │
+│ photos/      │ photos/      │</div>
+  <p class="note">Preview hidden silently — Shift+V state is preserved, it re-appears when terminal widens. Status bar shows a hint: <code>[preview hidden: narrow terminal]</code></p>
+</div>
+
+<div class="section">
+  <h3>c) Adaptive hex dump — bytes-per-row scales with available width</h3>
+  <p class="note">Formula: <span class="formula">bytesPerRow = max(4, (previewWidth − 14) / 4)</span> — address (8) + spacing (2) + per-byte (3) + ASCII sep (2) + per-byte ASCII (1) = 14 + 4N</p>
+
+  <div class="label">32 wide → 4 bytes/row</div>
+  <div class="term-box"><span style="color:#ce9178">data.bin</span> <span style="color:#dcdcaa">SQLite DB</span>
+─────────────────────────────
+00000000  53 51 4C 69  SQLi
+00000004  74 65 20 66  te f
+00000008  6F 72 6D 61  orma
+0000000C  74 20 33 00  t 3.</div>
+
+  <div class="label">56 wide → 10 bytes/row</div>
+  <div class="term-box"><span style="color:#ce9178">data.bin</span> <span style="color:#dcdcaa">SQLite 3 Database • 64 KB</span>
+────────────────────────────────────────────────────────
+00000000  53 51 4C 69 74 65 20 66 6F 72  SQLite for
+0000000A  6D 61 74 20 33 00 10 00 01 01  mat 3.....
+00000014  00 40 20 20 00 00 07 8F 00 00  .@  ......</div>
+
+  <div class="label">80+ wide → 16 bytes/row (standard)</div>
+  <div class="term-box"><span style="color:#ce9178">data.bin</span>  <span style="color:#dcdcaa">SQLite 3 Database • 64 KB</span>
+────────────────────────────────────────────────────────────────────────────────
+00000000  53 51 4C 69 74 65 20 66 6F 72 6D 61 74 20 33 00  SQLite format 3.
+00000010  10 00 01 01 00 40 20 20 00 00 07 8F 00 00 00 16  .....@  ........
+00000020  00 00 00 22 00 00 00 04 00 00 00 00 00 00 00 00  ..."............</div>
+</div>
+
+<div class="section">
+  <h3>d) Column width is an input, not a constant</h3>
+  <p class="note">Preview width calculation never hardcodes 32. It sums the actual display widths of drawn columns:</p>
+  <div class="formula">previewWidth = terminalWidth − drawnColumnsDisplayWidth</div>
+  <p class="note">Where <code>drawnColumnsDisplayWidth</code> is computed from whatever column widths are in use — works correctly when columns become resizable. All content-width calculations inside the preview renderer also take <code>previewWidth</code> as a parameter, never a constant.</p>
+</div>
