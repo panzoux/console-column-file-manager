@@ -430,12 +430,14 @@ sealed class ScreenState
 }
 
 internal record PreviewContent(
-    string   TypeLabel,
-    string   InfoLine,
-    string   Modified,
-    string[] BodyLines,
-    bool     IsPartial,
-    string?  ExtMismatch = null   // set when magic-detected type ≠ extension type
+    string    TypeLabel,
+    string    InfoLine,
+    string    Modified,
+    string[]  BodyLines,
+    bool      IsPartial,
+    string?   ExtMismatch = null,  // set when magic-detected type ≠ extension type
+    string[]? PixelLines  = null,  // pre-rendered ANSI half-block rows; bypasses SmartTruncate
+    int       PixelWidth  = 0      // visual width of each pixel line (count of ▄ chars)
 );
 
 internal sealed class PreviewPane
@@ -506,7 +508,7 @@ internal static class PreviewLoader
             };
 
             // If type-specific loader produced no body content, fall back to hex dump
-            if (content.BodyLines.Length == 0)
+            if (content.BodyLines.Length == 0 && content.PixelLines is null)
             {
                 var hex = await LoadBinaryAsync(filePath, fileType, modified, width, bodyHeight, ct);
                 content = content with { BodyLines = hex.BodyLines };
