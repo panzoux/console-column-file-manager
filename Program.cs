@@ -498,7 +498,7 @@ internal static class PreviewLoader
             var content = fileType.Category switch
             {
                 FileCategory.Text      => await LoadTextAsync(filePath, fileType, modified, width, bodyHeight, ct),
-                FileCategory.Image     => LoadImageMeta(filePath, fileType, modified, width),
+                FileCategory.Image     => await LoadImagePreviewAsync(filePath, fileType, modified, width, bodyHeight, ct),
                 FileCategory.Video     => LoadVideoMeta(filePath, fileType, modified, width),
                 FileCategory.Audio     => LoadAudioMeta(filePath, fileType, modified, width),
                 FileCategory.Archive   => await LoadArchiveAsync(filePath, fileType, modified, width, bodyHeight, ct),
@@ -2623,19 +2623,33 @@ static class Program
         }
 
         // Body lines
-        for (int i = 0; i < visibleHeight - bodyStart + 1 && i < content.BodyLines.Length; i++)
+        if (content.PixelLines != null)
         {
-            int row = bodyStart + i;
-            if (row >= visibleHeight + 1) break;
-            string bodyLine = CharacterWidth.SmartTruncate(content.BodyLines[i], previewWidth - 1);
-            int bodyW = CharacterWidth.GetStringWidth(bodyLine);
-            lines[row].AddColumn(bodyLine, bodyW, previewWidth);
+            // Pixel render: pass ANSI-escaped strings verbatim with their visual width
+            for (int i = 0; i < visibleHeight - bodyStart + 1 && i < content.PixelLines.Length; i++)
+            {
+                int row = bodyStart + i;
+                if (row >= visibleHeight + 1) break;
+                lines[row].AddColumn(content.PixelLines[i], content.PixelWidth, previewWidth);
+            }
+            int lastPixelRow = bodyStart + Math.Min(content.PixelLines.Length, visibleHeight - bodyStart + 1);
+            for (int i = lastPixelRow; i < visibleHeight + 1; i++)
+                lines[i].AddColumn("", 0, previewWidth);
         }
-
-        // Fill remaining rows with empty cells
-        int lastBodyRow = bodyStart + Math.Min(content.BodyLines.Length, visibleHeight - bodyStart + 1);
-        for (int i = lastBodyRow; i < visibleHeight + 1; i++)
-            lines[i].AddColumn("", 0, previewWidth);
+        else
+        {
+            for (int i = 0; i < visibleHeight - bodyStart + 1 && i < content.BodyLines.Length; i++)
+            {
+                int row = bodyStart + i;
+                if (row >= visibleHeight + 1) break;
+                string bodyLine = CharacterWidth.SmartTruncate(content.BodyLines[i], previewWidth - 1);
+                int bodyW = CharacterWidth.GetStringWidth(bodyLine);
+                lines[row].AddColumn(bodyLine, bodyW, previewWidth);
+            }
+            int lastBodyRow = bodyStart + Math.Min(content.BodyLines.Length, visibleHeight - bodyStart + 1);
+            for (int i = lastBodyRow; i < visibleHeight + 1; i++)
+                lines[i].AddColumn("", 0, previewWidth);
+        }
     }
 
 
