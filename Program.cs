@@ -429,6 +429,21 @@ sealed class ScreenState
     public int PrevWidth;
     public int PrevHeight;
     public readonly PreviewPane Preview = new();
+    public SearchState Search = new();
+}
+
+sealed class SearchState
+{
+    public bool Active;
+    public string Query = "";
+    public int Anchor;           // column.Selected when search started; restored on Esc
+    public List<int> Matches = new();
+    public int MatchIndex;       // index into Matches of current highlighted match
+    public bool RegexMode;       // false = literal/migemo, true = raw regex
+    public CancellationTokenSource? SearchCts;
+    public bool NeedsRecompute;  // set by keystroke, consumed by debounce tick
+    public DateTime LastInputTime;
+    public bool SearchDone;      // false while async scan in progress
 }
 
 internal record PreviewContent(
@@ -1448,6 +1463,7 @@ static class Program
     static readonly ScreenState State = new ScreenState();
     static DateTime _lastNavigationTime = DateTime.MinValue;
     static string? _lastErrorMessage = null;
+    static readonly object _searchLock = new object();
 
     static readonly Dictionary<string, string> _cursorMemory = new(StringComparer.OrdinalIgnoreCase);
     static readonly List<string> _cursorMemoryKeys = new();
