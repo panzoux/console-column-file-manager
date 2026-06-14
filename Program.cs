@@ -34,6 +34,8 @@ using System.Threading.Tasks;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using System.ComponentModel;
+using System.Security.Cryptography;
 
 internal enum FileCategory { Text, Image, Video, Audio, Archive, Executable, Pdf, Drive, Binary }
 
@@ -499,7 +501,7 @@ internal static class PreviewLoader
             {
                 FileCategory.Text      => await LoadTextAsync(filePath, fileType, modified, width, bodyHeight, ct),
                 FileCategory.Image     => await LoadImagePreviewAsync(filePath, fileType, modified, width, bodyHeight, ct),
-                FileCategory.Video     => LoadVideoMeta(filePath, fileType, modified, width),
+                FileCategory.Video     => await LoadVideoPreviewAsync(filePath, fileType, modified, width, bodyHeight, ct),
                 FileCategory.Audio     => LoadAudioMeta(filePath, fileType, modified, width),
                 FileCategory.Archive   => await LoadArchiveAsync(filePath, fileType, modified, width, bodyHeight, ct),
                 FileCategory.Executable=> LoadExecutable(filePath, fileType, modified, width),
@@ -755,6 +757,109 @@ internal static class PreviewLoader
             return new PreviewContent(fileType.Label, info, modified, [], false);
         }
         catch { return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false); }
+    }
+
+    internal static string GetVideoCachePath(string filePath)
+    {
+        var fi = new FileInfo(filePath);
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(filePath));
+        string prefix = Convert.ToHexString(hash[..16]).ToLowerInvariant();
+        string cacheDir = Path.Combine(Path.GetTempPath(), "ColumnFileManager");
+        Directory.CreateDirectory(cacheDir);
+        return Path.Combine(cacheDir, $"{prefix}_{fi.LastWriteTimeUtc.Ticks:x16}_{fi.Length:x16}.png");
+    }
+
+    private static async Task<bool> ExtractVideoFrameAsync(string filePath, string cachePath, CancellationToken ct)
+    {
+        string tempFile = cachePath + ".tmp";
+        Process? process = null;
+        try
+        {
+            var psi = new ProcessStartInfo("ffmpeg")
+            {
+                UseShellExecute       = false,
+                CreateNoWindow        = true,
+                RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add("-ss");       psi.ArgumentList.Add("00:00:05");
+            psi.ArgumentList.Add("-i");        psi.ArgumentList.Add(filePath);
+            psi.ArgumentList.Add("-vframes");  psi.ArgumentList.Add("1");
+            psi.ArgumentList.Add("-vf");       psi.ArgumentList.Add("scale=63:200:force_original_aspect_ratio=decrease");
+            psi.ArgumentList.Add("-f");        psi.ArgumentList.Add("image2");
+            psi.ArgumentList.Add("-loglevel"); psi.ArgumentList.Add("error");
+            psi.ArgumentList.Add("-y");        psi.ArgumentList.Add(tempFile);
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            process = Process.Start(psi);
+            if (process is null) return false;
+            await process.WaitForExitAsync(linkedCts.Token);
+
+            if (process.ExitCode != 0 || !File.Exists(tempFile) || new FileInfo(tempFile).Length == 0)
+                return false;
+
+            File.Move(tempFile, cachePath, overwrite: true);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) { return false; }
+        catch (Win32Exception) { return false; }
+        catch { return false; }
+        finally
+        {
+            try { process?.Kill(entireProcessTree: true); } catch { }
+            try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+        }
+    }
+
+    internal static async Task<PreviewContent> LoadVideoPreviewAsync(
+        string filePath, FileType fileType, string modified,
+        int width, int bodyHeight, CancellationToken ct)
+    {
+        var meta = LoadVideoMeta(filePath, fileType, modified, width);
+
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+
+            int pixelCols = width - 1;
+            int pixelRows = (bodyHeight - 1) * 2;
+            if (pixelCols <= 0 || pixelRows <= 0) return meta;
+
+            string cachePath = GetVideoCachePath(filePath);
+
+            if (!File.Exists(cachePath))
+            {
+                bool extracted = await ExtractVideoFrameAsync(filePath, cachePath, ct);
+                if (!extracted) return meta;
+            }
+
+            var (pixelLines, pixelWidth) = await Task.Run(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                using var image = Image.Load<Rgba32>(cachePath);
+                ct.ThrowIfCancellationRequested();
+
+                int srcW = image.Width;
+                int srcH = image.Height;
+                double scaleX = pixelCols > 0 ? (double)pixelCols / srcW : 1.0;
+                double scaleY = pixelRows > 0 ? (double)pixelRows / srcH : 1.0;
+                double scale  = Math.Min(scaleX, scaleY);
+                int tgtW = Math.Max(1, (int)(srcW * scale));
+                int tgtH = Math.Max(2, (int)(srcH * scale));
+                if (tgtH % 2 != 0) tgtH--;
+
+                image.Mutate(ctx => ctx.Resize(tgtW, tgtH));
+                string[] lines = RenderPixelLines(image, tgtW, tgtH);
+                return (lines, tgtW);
+            }, ct);
+
+            ct.ThrowIfCancellationRequested();
+            return meta with { PixelLines = pixelLines, PixelWidth = pixelWidth };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return meta; }
     }
 
     private static string ParseMp4Info(string filePath)
@@ -1350,13 +1455,14 @@ static class Program
 
     static async Task Main()
     {
+        Console.OutputEncoding = Encoding.UTF8;
+        Console.Write("\x1b[?1049h"); // Enter alternate screen buffer
+
         try
         {
             Console.CursorVisible = false;
         }
         catch { }
-
-        Console.OutputEncoding = Encoding.UTF8;
 
         try
         {
@@ -1380,8 +1486,6 @@ static class Program
                 switch (key.KeyChar)
                 {
                     case (char)27: // Esc
-                        Console.Clear();
-                        try { Console.CursorVisible = true; } catch { }
                         return;
 
                     default:
@@ -1393,6 +1497,7 @@ static class Program
         finally
         {
             try { Console.CursorVisible = true; } catch { }
+            Console.Write("\x1b[?1049l"); // Leave alternate screen buffer
         }
     }
 
@@ -1455,6 +1560,38 @@ static class Program
                 State.Preview.Content = new PreviewContent("No preview", "Empty folder", "", [], false);
                 State.Preview.IsLoading = false;
                 return;
+            }
+        }
+
+        // Directory preview — show item count from the already-loaded right column
+        if (State.ActiveColumn >= 0 && State.ActiveColumn < Columns.Count)
+        {
+            Column col = Columns[State.ActiveColumn];
+            if (col.Selected >= 0 && col.Selected < col.Entries.Count)
+            {
+                string selName = col.Entries[col.Selected];
+                if (selName.EndsWith("/") && col.Path != "::DRIVES::")
+                {
+                    string dirPath = System.IO.Path.Combine(col.Path, selName.TrimEnd('/'));
+                    if (!forceReload && State.Preview.CurrentPath == dirPath && State.Preview.Content != null)
+                        return;
+                    string subtitle = "";
+                    int rcIdx = State.ActiveColumn + 1;
+                    if (rcIdx < Columns.Count)
+                    {
+                        Column rc = Columns[rcIdx];
+                        if (!rc.IsLoading && rc.Entries.Count > 0)
+                        {
+                            int count = (rc.Entries.Count == 1 && rc.Entries[0] == "<No file>") ? 0 : rc.Entries.Count;
+                            subtitle = count == 0 ? "Empty" : $"{count} item{(count == 1 ? "" : "s")}";
+                        }
+                    }
+                    State.Preview.Cancel();
+                    State.Preview.CurrentPath = dirPath;
+                    State.Preview.Content = new PreviewContent("Directory", subtitle, "", [], false);
+                    State.Preview.IsLoading = false;
+                    return;
+                }
             }
         }
 
@@ -2020,11 +2157,15 @@ static class Program
         bool previewTakesSlot = State.Preview.IsVisible && SelectedItemIsFileOrDrive();
         int visibleColumns = Math.Max(1, Console.WindowWidth / ColumnWidth - (previewTakesSlot ? 1 : 0));
 
-        // Keep active column visible
-        int minHS = Math.Max(0, State.ActiveColumn - visibleColumns + 1);
-        // Fill from right — don't leave empty column slots when left columns could fill them
-        int maxHS = Math.Max(0, Columns.Count - visibleColumns);
-
+        // Only reserve a right-column slot when on a directory — files never expand rightward,
+        // and the old dir column may still be in Columns during async rebuild.
+        bool hasRightColumn = !previewTakesSlot && Columns.Count > State.ActiveColumn + 1;
+        int rightReserve = hasRightColumn ? 1 : 0;
+        int minHS = Math.Max(0, State.ActiveColumn - visibleColumns + 1 + rightReserve);
+        // maxHS = AC: the only hard constraint is that AC must be visible (HS ≤ AC).
+        // No Columns.Count upper bound — allows the rightmost slot to be blank when the
+        // directory tree is shallow (Finder behavior: scroll position is preserved).
+        int maxHS = State.ActiveColumn;
         State.HorizontalScroll = Math.Max(minHS, Math.Min(State.HorizontalScroll, maxHS));
     }
 
@@ -2279,6 +2420,9 @@ static class Program
 
             nextPath = GetSelectedDirectory(Columns.Count - 1);
         }
+
+        // Recalculate scroll now that the right-side column count is final.
+        UpdateHorizontalScroll();
     }
 
     static string? GetSelectedDirectory(int columnIndex)
@@ -2396,15 +2540,15 @@ static class Program
         for (int i = 0; i < height; i++)
             lines[i] = new Line();
 
-        // Determine if preview should be shown
-        bool showPreview = State.Preview.IsVisible
-            && SelectedItemIsFileOrDrive()
-            && Console.WindowWidth >= ColumnWidth * 2;
+        // Show preview whenever it's visible and there's room — for files it occupies a reserved slot,
+        // for directories it fills blank space left after columns run out (Finder-style).
+        bool showPreview = State.Preview.IsVisible && Console.WindowWidth >= ColumnWidth * 2;
+        // Only carve out a reserved column slot for files; directories fill blank space naturally.
+        bool filePreview = State.Preview.IsVisible && SelectedItemIsFileOrDrive();
 
         int displayX = 0;
         int drawnColumnsWidth = 0;
-        // Reserve one ColumnWidth slot for the preview pane when it will be shown
-        int columnDrawLimit = showPreview ? width - ColumnWidth : width;
+        int columnDrawLimit = filePreview ? width - ColumnWidth : width;
 
         for (int i = State.HorizontalScroll;
              i < Columns.Count && displayX + ColumnWidth <= columnDrawLimit;
