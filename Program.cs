@@ -1663,6 +1663,15 @@ static class Program
     static async Task Main()
     {
         Console.OutputEncoding = Encoding.UTF8;
+        _migemo = new MigemoProvider();
+        if (!_migemo.IsAvailable)
+        {
+            if (_migemo.DllLoaded)
+                Console.WriteLine("migemo: dict not found — plain search active");
+            _migemo.Dispose();
+            _migemo = null;
+        }
+
         Console.Write("\x1b[?1049h"); // Enter alternate screen buffer
 
         try
@@ -1717,6 +1726,7 @@ static class Program
         {
             try { Console.CursorVisible = true; } catch { }
             Console.Write("\x1b[?1049l"); // Leave alternate screen buffer
+            _migemo?.Dispose();
         }
     }
 
