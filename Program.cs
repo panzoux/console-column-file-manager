@@ -562,6 +562,36 @@ sealed class MigemoProvider : IDisposable
     }
 }
 
+static class SearchHelper
+{
+    public static bool MatchesSearchQuery(string entry, string query, bool regexMode, MigemoProvider? migemo)
+    {
+        if (string.IsNullOrEmpty(query)) return false;
+
+        if (regexMode)
+        {
+            try { return System.Text.RegularExpressions.Regex.IsMatch(entry, query, System.Text.RegularExpressions.RegexOptions.IgnoreCase); }
+            catch (System.Text.RegularExpressions.RegexParseException) { return false; }
+        }
+
+        if (migemo?.IsAvailable == true)
+        {
+            string pattern = migemo.ExpandPattern(query);
+            try { return System.Text.RegularExpressions.Regex.IsMatch(entry, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase); }
+            catch { return entry.Contains(query, StringComparison.OrdinalIgnoreCase); }
+        }
+
+        return entry.Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static int FindNearestMatchIndex(List<int> matches, int anchor)
+    {
+        for (int i = 0; i < matches.Count; i++)
+            if (matches[i] >= anchor) return i;
+        return 0;
+    }
+}
+
 internal record PreviewContent(
     string    TypeLabel,
     string    InfoLine,
