@@ -1707,6 +1707,9 @@ static class Program
                         && (DateTime.UtcNow - State.Search.LastInputTime).TotalMilliseconds >= 300)
                     {
                         await RecomputeMatchesAsync();
+                        UpdateHorizontalScroll();
+                        await RebuildRightSideAsync(State.ActiveColumn);
+                        if (State.Preview.IsVisible) StartPreviewLoad();
                     }
                     System.Threading.Thread.Sleep(50);
                     continue;
