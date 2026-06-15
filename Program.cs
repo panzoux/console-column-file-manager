@@ -446,6 +446,91 @@ sealed class SearchState
     public bool SearchDone;      // false while async scan in progress
 }
 
+sealed class MigemoProvider : IDisposable
+{
+    [System.Runtime.InteropServices.DllImport("migemo",
+        CharSet = System.Runtime.InteropServices.CharSet.Ansi,
+        CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]
+    static extern IntPtr migemo_open(string dict_path);
+
+    [System.Runtime.InteropServices.DllImport("migemo",
+        CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]
+    static extern void migemo_close(IntPtr h);
+
+    [System.Runtime.InteropServices.DllImport("migemo",
+        CharSet = System.Runtime.InteropServices.CharSet.Ansi,
+        CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]
+    static extern IntPtr migemo_query(IntPtr h, string query);
+
+    [System.Runtime.InteropServices.DllImport("migemo",
+        CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]
+    static extern void migemo_release(IntPtr h, IntPtr result);
+
+    IntPtr _handle = IntPtr.Zero;
+    bool _disposed;
+
+    public bool DllLoaded { get; private set; }   // true if migemo.dll was found
+    public bool IsAvailable { get; private set; } // true if DLL + dict both loaded
+
+    public MigemoProvider()
+    {
+        try
+        {
+            string? dictFile = FindDictFile();
+            if (dictFile == null) return;
+            DllLoaded = true;
+            _handle = migemo_open(dictFile);
+            IsAvailable = _handle != IntPtr.Zero;
+        }
+        catch
+        {
+            // DLL absent or failed to load — silent
+        }
+    }
+
+    static string? FindDictFile()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "dict", "migemo-dict"),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ColumnFileManager", "dict", "migemo-dict"),
+            "/usr/share/cmigemo/utf-8/migemo-dict",
+            "/usr/local/share/migemo/utf-8/migemo-dict",
+            "/opt/homebrew/share/migemo/utf-8/migemo-dict",
+        };
+        foreach (var path in candidates)
+            if (File.Exists(path)) return path;
+        return null;
+    }
+
+    public string ExpandPattern(string romaji)
+    {
+        if (!IsAvailable || string.IsNullOrEmpty(romaji)) return romaji;
+        try
+        {
+            IntPtr ptr = migemo_query(_handle, romaji);
+            if (ptr == IntPtr.Zero) return romaji;
+            string? result = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ptr);
+            migemo_release(_handle, ptr);
+            return result ?? romaji;
+        }
+        catch { return romaji; }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        if (_handle != IntPtr.Zero)
+        {
+            try { migemo_close(_handle); } catch { }
+            _handle = IntPtr.Zero;
+        }
+    }
+}
+
 internal record PreviewContent(
     string    TypeLabel,
     string    InfoLine,
@@ -1464,6 +1549,7 @@ static class Program
     static DateTime _lastNavigationTime = DateTime.MinValue;
     static string? _lastErrorMessage = null;
     static readonly object _searchLock = new object();
+    static MigemoProvider? _migemo;
 
     static readonly Dictionary<string, string> _cursorMemory = new(StringComparer.OrdinalIgnoreCase);
     static readonly List<string> _cursorMemoryKeys = new();
