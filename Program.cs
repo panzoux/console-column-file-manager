@@ -1716,7 +1716,7 @@ static class Program
 
                 if (State.Search.Active)
                 {
-                    HandleSearchKeyAsync(key);
+                    await HandleSearchKeyAsync(key);
                     continue;
                 }
 
@@ -2762,7 +2762,7 @@ static class Program
         }
     }
 
-    static void HandleSearchKeyAsync(ConsoleKeyInfo key)
+    static async Task HandleSearchKeyAsync(ConsoleKeyInfo key)
     {
         SearchState s = State.Search;
         Column col = Columns[State.ActiveColumn];
@@ -2770,12 +2770,18 @@ static class Program
         if (key.Key == ConsoleKey.Escape)
         {
             ExitSearchMode(restoreCursor: true);
+            UpdateHorizontalScroll();
+            await RebuildRightSideAsync(State.ActiveColumn);
+            if (State.Preview.IsVisible) StartPreviewLoad();
             return;
         }
 
         if (key.Key == ConsoleKey.Enter)
         {
             ExitSearchMode(restoreCursor: false);
+            UpdateHorizontalScroll();
+            await RebuildRightSideAsync(State.ActiveColumn);
+            if (State.Preview.IsVisible) StartPreviewLoad();
             return;
         }
 
@@ -2790,14 +2796,21 @@ static class Program
         if (key.Key == ConsoleKey.DownArrow ||
             (key.Key == ConsoleKey.N && (key.Modifiers & ConsoleModifiers.Control) != 0))
         {
+            bool moved = false;
             lock (_searchLock)
             {
                 if (s.Matches.Count > 0)
                 {
                     s.MatchIndex = (s.MatchIndex + 1) % s.Matches.Count;
                     col.Selected = s.Matches[s.MatchIndex];
-                    UpdateHorizontalScroll();
+                    moved = true;
                 }
+            }
+            if (moved)
+            {
+                UpdateHorizontalScroll();
+                await RebuildRightSideAsync(State.ActiveColumn);
+                if (State.Preview.IsVisible) StartPreviewLoad();
             }
             return;
         }
@@ -2805,14 +2818,21 @@ static class Program
         if (key.Key == ConsoleKey.UpArrow ||
             (key.Key == ConsoleKey.P && (key.Modifiers & ConsoleModifiers.Control) != 0))
         {
+            bool moved = false;
             lock (_searchLock)
             {
                 if (s.Matches.Count > 0)
                 {
                     s.MatchIndex = (s.MatchIndex - 1 + s.Matches.Count) % s.Matches.Count;
                     col.Selected = s.Matches[s.MatchIndex];
-                    UpdateHorizontalScroll();
+                    moved = true;
                 }
+            }
+            if (moved)
+            {
+                UpdateHorizontalScroll();
+                await RebuildRightSideAsync(State.ActiveColumn);
+                if (State.Preview.IsVisible) StartPreviewLoad();
             }
             return;
         }
