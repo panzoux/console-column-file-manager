@@ -1648,7 +1648,7 @@ static class Program
 
                 if (State.Search.Active)
                 {
-                    await HandleSearchKeyAsync(key);
+                    HandleSearchKeyAsync(key);
                     continue;
                 }
 
@@ -2693,7 +2693,7 @@ static class Program
         }
     }
 
-    static async Task HandleSearchKeyAsync(ConsoleKeyInfo key)
+    static void HandleSearchKeyAsync(ConsoleKeyInfo key)
     {
         SearchState s = State.Search;
         Column col = Columns[State.ActiveColumn];
