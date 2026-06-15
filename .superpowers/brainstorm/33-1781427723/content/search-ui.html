@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Quick Search & Navigation — Mockup</title>
+<style>
+  body { background: #1e1e2e; color: #cdd6f4; font-family: 'Cascadia Code', 'Consolas', monospace; margin: 0; padding: 20px; }
+  h2 { color: #cba6f7; margin: 0 0 6px 0; font-size: 1.1rem; }
+  .subtitle { color: #6c7086; font-size: 0.85rem; margin: 0 0 20px 0; }
+  .scenario { margin-bottom: 28px; }
+  .scenario-label { font-size: 0.75rem; color: #89b4fa; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .terminal {
+    background: #11111b;
+    border: 1px solid #313244;
+    border-radius: 6px;
+    overflow: hidden;
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+  .terminal-body { padding: 2px 0; }
+  .row { display: flex; white-space: pre; }
+  .col { display: inline-block; width: 220px; padding: 0 4px; border-right: 1px solid #313244; }
+  .col:last-child { border-right: none; flex: 1; }
+  .col-header { background: #1e1e2e; color: #89b4fa; padding: 1px 4px; font-weight: bold; border-bottom: 1px solid #313244; border-right: 1px solid #313244; }
+  .col-header:last-child { border-right: none; }
+  .entry { padding: 1px 4px; color: #cdd6f4; }
+  .entry.dir { color: #89b4fa; }
+  .entry.selected { background: #45475a; color: #cdd6f4; }
+  .entry.selected.dir { color: #89dceb; }
+  .entry.match { background: #313244; color: #a6e3a1; }
+  .entry.match-current { background: #45475a; color: #a6e3a1; font-weight: bold; }
+  .entry.dim { color: #585b70; }
+  .status-bar { background: #181825; color: #6c7086; padding: 1px 4px; border-top: 1px solid #313244; font-size: 0.75rem; }
+  .status-bar.search { color: #cdd6f4; background: #181825; }
+  .path-bar { background: #181825; color: #a6adc8; padding: 1px 4px; border-top: 1px solid #313244; font-size: 0.75rem; }
+  .search-prompt { color: #cba6f7; }
+  .search-cursor { background: #cba6f7; color: #1e1e2e; }
+  .key { display: inline-block; background: #313244; border: 1px solid #45475a; border-radius: 3px; padding: 0 4px; font-size: 0.7rem; color: #cdd6f4; margin: 0 2px; }
+  .annotation { font-size: 0.72rem; color: #6c7086; margin-top: 6px; padding-left: 4px; }
+  .annotation span { color: #a6e3a1; }
+  .headers { display: flex; }
+  .note { background: #1e1e2e; border-left: 3px solid #f38ba8; padding: 8px 12px; margin-top: 8px; font-size: 0.75rem; color: #a6adc8; border-radius: 0 4px 4px 0; }
+</style>
+</head>
+<body>
+<h2>Quick Search &amp; Navigation — UI Mockup</h2>
+<p class="subtitle">How the terminal looks in normal mode vs search mode</p>
+
+<!-- ── Scenario 1: Normal mode with new keys ── -->
+<div class="scenario">
+  <div class="scenario-label">Normal mode — navigation keys</div>
+  <div class="terminal">
+    <div class="headers">
+      <div class="col col-header">C:\Users\user\</div>
+      <div class="col col-header">Documents\</div>
+      <div class="col col-header" style="flex:1">Projects\</div>
+    </div>
+    <div class="terminal-body">
+      <div class="row">
+        <div class="col"><div class="entry dir">Desktop/</div></div>
+        <div class="col"><div class="entry dir">Projects/</div></div>
+        <div class="col"><div class="entry dir">alpha/</div></div>
+      </div>
+      <div class="row">
+        <div class="col"><div class="entry dir selected">Documents/</div></div>
+        <div class="col"><div class="entry dir selected">Work/</div></div>
+        <div class="col"><div class="entry dir selected">beta/</div></div>
+      </div>
+      <div class="row">
+        <div class="col"><div class="entry dir">Downloads/</div></div>
+        <div class="col"><div class="entry">report.pdf</div></div>
+        <div class="col"><div class="entry">README.md</div></div>
+      </div>
+      <div class="row">
+        <div class="col"><div class="entry dir">Music/</div></div>
+        <div class="col"><div class="entry">notes.txt</div></div>
+        <div class="col"><div class="entry">main.cs</div></div>
+      </div>
+      <div class="row">
+        <div class="col"><div class="entry dir">Pictures/</div></div>
+        <div class="col"><div class="entry dim">…</div></div>
+        <div class="col"><div class="entry dim">…</div></div>
+      </div>
+    </div>
+    <div class="path-bar">C:\Users\user\Documents\Projects\beta\</div>
+    <div class="status-bar">Esc=Quit | PgUp/PgDn=Page scroll | Home/End=Top/Bottom | /=Search | Shift+V=Preview[off]</div>
+  </div>
+  <div class="annotation">
+    New keys: <span>PgUp / Ctrl+B</span> = page up &nbsp;·&nbsp; <span>PgDn / Ctrl+F</span> = page down &nbsp;·&nbsp; <span>Home / g</span> = top &nbsp;·&nbsp; <span>End / G</span> = bottom &nbsp;·&nbsp; <span>/</span> = enter search
+  </div>
+</div>
+
+<!-- ── Scenario 2: Search mode, mid-typing ── -->
+<div class="scenario">
+  <div class="scenario-label">Search mode — typing "rep"</div>
+  <div class="terminal">
+    <div class="headers">
+      <div class="col col-header">C:\Users\user\</div>
+      <div class="col col-header">Documents\</div>
+      <div class="col col-header" style="flex:1">Work\</div>
+    </div>
+    <div class="terminal-body">
+      <div class="row">
+        <div class="col"><div class="entry dir">Desktop/</div></div>
+        <div class="col"><div class="entry dir">Projects/</div></div>
+        <div class="col"><div class="entry dim">annual_report.docx</div></div>
+      </div>
+      <div class="row">
+        <div class="col"><div class="entry dir selected">Documents/</div></div>
+        <div class="col"><div class="entry dir">Work/</div></div>
+        <div class="col"><div class="entry match-current">report_2025.pdf</div></div>
+      </div>
+      <div class="row">
+        <div class="col"><div class="entry dir">Downloads/</div></div>
+        <div class="col"><div class="entry">notes.txt</div></div>
+        <div class="col"><div class="entry match">report_draft.pdf</div></div>
+      </div>
+      <div class="row">
+        <div class="col"><div class="entry dir">Music/</div></div>
+        <div class="col"><div class="entry dim">…</div></div>
+        <div class="col"><div class="entry dim">budget.xlsx</div></div>
+      </div>
+      <div class="row">
+        <div class="col"><div class="entry dir">Pictures/</div></div>
+        <div class="col"><div class="entry dim">…</div></div>
+        <div class="col"><div class="entry dim">…</div></div>
+      </div>
+    </div>
+    <div class="path-bar">C:\Users\user\Documents\Work\report_2025.pdf</div>
+    <div class="status-bar search"><span class="search-prompt">/</span>rep<span class="search-cursor"> </span>&nbsp;&nbsp; match 1/2 &nbsp;·&nbsp; Ctrl+N/↓=next &nbsp;·&nbsp; Ctrl+P/↑=prev &nbsp;·&nbsp; Esc=exit search</div>
+  </div>
+  <div class="annotation">
+    Status bar replaced with search prompt. <span>Current match</span> highlighted bright green, <span>other matches</span> dimmer green. Cursor moves to first match instantly as you type.
+  </div>
+</div>
+
+<!-- ── Scenario 3: Search with migemo ── -->
+<div class="scenario">
+  <div class="scenario-label">Search mode — migemo romanji input "rep" matching Japanese filename</div>
+  <div class="terminal">
+    <div class="headers">
+      <div class="col col-header" style="width:240px">…</div>
+      <div class="col col-header" style="flex:1">レポート\</div>
+    </div>
+    <div class="terminal-body">
+      <div class="row">
+        <div class="col" style="width:240px"><div class="entry dim">…</div></div>
+        <div class="col"><div class="entry match-current">レポート2025.docx</div></div>
+      </div>
+      <div class="row">
+        <div class="col" style="width:240px"><div class="entry dim">…</div></div>
+        <div class="col"><div class="entry match">週次レポート.pdf</div></div>
+      </div>
+      <div class="row">
+        <div class="col" style="width:240px"><div class="entry dim">…</div></div>
+        <div class="col"><div class="entry dim">予算.xlsx</div></div>
+      </div>
+    </div>
+    <div class="path-bar">…\レポート\レポート2025.docx</div>
+    <div class="status-bar search"><span class="search-prompt">/</span>rep<span class="search-cursor"> </span>&nbsp;&nbsp; match 1/2 (migemo) &nbsp;·&nbsp; Ctrl+N/↓=next &nbsp;·&nbsp; Ctrl+P/↑=prev &nbsp;·&nbsp; Esc=exit search</div>
+  </div>
+  <div class="annotation">
+    Migemo: typing <span>"rep"</span> matches both ASCII "report" and Japanese <span>レポート</span> (romaji: "repo-to"). The status bar notes "(migemo)" when a migemo match is active.
+  </div>
+</div>
+
+<div class="note">
+  <strong>Question:</strong> Does this layout look right? Specifically — is putting the search prompt <em>in the status bar</em> the right place, or would you prefer it elsewhere (e.g. a separate line above the status bar)?
+</div>
+</body>
+</html>

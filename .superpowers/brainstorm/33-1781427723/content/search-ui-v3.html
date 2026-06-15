@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Quick Search — v3 Mockup</title>
+<style>
+  :root {
+    --c-black:   #1e1e2e;
+    --c-red:     #f38ba8; /* ANSI 31 */
+    --c-green:   #a6e3a1; /* ANSI 32 */
+    --c-yellow:  #f9e2af; /* ANSI 33 */
+    --c-blue:    #89b4fa; /* ANSI 34 */
+    --c-magenta: #cba6f7; /* ANSI 35 */
+    --c-white:   #cdd6f4; /* ANSI 37 */
+    --c-bblack:  #585b70; /* ANSI 90 */
+    --bg-white:  #cdd6f4; /* ANSI 47 */
+    --bg-green:  #3d7a47; /* ANSI 42 — darker terminal green bg */
+    --bg-bblack: #45475a; /* ANSI 100 */
+    --bg-term:   #11111b;
+    --border:    #313244;
+  }
+  body { background:#1e1e2e; color:var(--c-white); font-family:'Cascadia Code','Consolas',monospace; margin:0; padding:20px; font-size:13px; }
+  h2   { color:var(--c-magenta); margin:0 0 4px 0; font-size:1rem; }
+  .sub { color:var(--c-bblack); font-size:0.8rem; margin:0 0 18px 0; }
+  .label { font-size:0.7rem; color:var(--c-blue); text-transform:uppercase; letter-spacing:.08em; margin-bottom:5px; }
+  .scenario { margin-bottom:24px; }
+
+  .term { background:var(--bg-term); border:1px solid var(--border); border-radius:5px; overflow:hidden; }
+  .col-headers { display:flex; border-bottom:1px solid var(--border); }
+  .ch { font-size:0.72rem; color:var(--c-blue); padding:2px 6px; border-right:1px solid var(--border); width:210px; box-sizing:border-box; }
+  .ch.flex { flex:1; border-right:none; }
+
+  .rows { }
+  .frow { display:flex; }
+  .cell { width:210px; padding:1px 6px; white-space:pre; overflow:hidden; text-overflow:ellipsis; box-sizing:border-box; }
+  .cell.flex { flex:1; }
+  .dir  { color:var(--c-blue); }
+  .file { color:var(--c-white); }
+  .dim  { color:var(--c-bblack); }
+
+  .sel-active   { background:var(--bg-white); color:#1e1e2e; }
+  .sel-active.dir { color:var(--c-blue); }
+  .sel-inactive { background:var(--bg-bblack); }
+
+  /* v3: current match = green bg (ANSI 42) + black text (ANSI 30) — high contrast */
+  /* v3: other matches = green fg (ANSI 32) on default bg */
+  .match-current { background:var(--bg-green); color:#111; font-weight:bold; }
+  .match-other   { color:var(--c-green); }
+
+  .path-bar   { background:#181825; color:var(--c-bblack); padding:2px 6px; border-top:1px solid var(--border); font-size:0.72rem; }
+  .status-bar { background:#181825; color:var(--c-bblack); padding:2px 6px; border-top:1px solid var(--border); font-size:0.72rem; display:flex; justify-content:space-between; }
+  .status-bar.search { color:var(--c-white); }
+  .sp     { color:var(--c-yellow); }
+  .cursor { background:var(--c-white); color:#1e1e2e; }
+  .match-count { color:var(--c-bblack); }
+
+  .note { border-left:3px solid var(--c-yellow); padding:8px 12px; margin-top:8px; font-size:0.75rem; color:var(--c-bblack); background:#1a1a2e; border-radius:0 4px 4px 0; }
+  .ok { color:var(--c-green); }
+  .contrast-demo { display:flex; gap:16px; margin-top:8px; align-items:center; flex-wrap:wrap; }
+  .demo-cell { padding:3px 10px; border-radius:3px; font-size:0.8rem; }
+</style>
+</head>
+<body>
+<h2>Quick Search — v3 (contrast fix)</h2>
+<p class="sub">Current match: green bg (ANSI 42) + black text (ANSI 30) · Other matches: green fg (ANSI 32) only</p>
+
+<!-- ── Contrast comparison ── -->
+<div class="scenario">
+  <div class="label">Contrast comparison</div>
+  <div class="contrast-demo">
+    <div>
+      <div class="label" style="margin-bottom:3px">v2 — green text on white bg ✗</div>
+      <div class="demo-cell" style="background:var(--bg-white); color:var(--c-green)">report_2025.pdf</div>
+    </div>
+    <div>
+      <div class="label" style="margin-bottom:3px">v3 — black text on green bg ✓</div>
+      <div class="demo-cell" style="background:var(--bg-green); color:#111; font-weight:bold">report_2025.pdf</div>
+    </div>
+    <div>
+      <div class="label" style="margin-bottom:3px">other matches — green fg on dark ✓</div>
+      <div class="demo-cell" style="background:var(--bg-term); color:var(--c-green)">annual_report.docx</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Search mode mid-type ── -->
+<div class="scenario">
+  <div class="label">Search mode — "rep" · 3 matches</div>
+  <div class="term">
+    <div class="col-headers">
+      <div class="ch">C:\Users\user\</div>
+      <div class="ch">Documents\</div>
+      <div class="ch flex">Work\</div>
+    </div>
+    <div class="rows">
+      <div class="frow">
+        <div class="cell dir">Desktop/</div>
+        <div class="cell dir">Projects/</div>
+        <div class="cell file match-other flex">annual_report.docx</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir sel-inactive">Documents/</div>
+        <div class="cell dir sel-active">Work/</div>
+        <div class="cell file match-current flex">report_2025.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Downloads/</div>
+        <div class="cell file">notes.txt</div>
+        <div class="cell file match-other flex">report_draft.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Music/</div>
+        <div class="cell dim">…</div>
+        <div class="cell file flex">budget.xlsx</div>
+      </div>
+    </div>
+    <div class="path-bar">C:\Users\user\Documents\Work\report_2025.pdf</div>
+    <div class="status-bar search">
+      <span><span class="sp">/</span>rep<span class="cursor"> </span></span>
+      <span class="match-count">(1/3)</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── No match ── -->
+<div class="scenario">
+  <div class="label">Search mode — no match</div>
+  <div class="term">
+    <div class="col-headers">
+      <div class="ch">C:\Users\user\</div>
+      <div class="ch">Documents\</div>
+      <div class="ch flex">Work\</div>
+    </div>
+    <div class="rows">
+      <div class="frow">
+        <div class="cell dir">Desktop/</div>
+        <div class="cell dir">Projects/</div>
+        <div class="cell file flex">annual_report.docx</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir sel-inactive">Documents/</div>
+        <div class="cell dir sel-active">Work/</div>
+        <div class="cell file flex">report_2025.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Downloads/</div>
+        <div class="cell file">notes.txt</div>
+        <div class="cell file flex">report_draft.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Music/</div>
+        <div class="cell dim">…</div>
+        <div class="cell file flex">budget.xlsx</div>
+      </div>
+    </div>
+    <div class="path-bar">C:\Users\user\Documents\Work\</div>
+    <div class="status-bar search" style="color:var(--c-red); justify-content:space-between;">
+      <span><span style="color:var(--c-red)">/</span>xyz<span class="cursor"> </span></span>
+      <span style="color:var(--c-red)">(0)</span>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  ANSI 42 (green bg) renders darker than ANSI 32 (green fg) in most terminals — that's what gives the contrast. The exact shade depends on the user's terminal color scheme, but black-on-green is always readable.
+</div>
+</body>
+</html>

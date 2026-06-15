@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Quick Search — v2 Mockup</title>
+<style>
+  /* Simulate a terminal's 16-color palette as rendered by a typical dark-theme terminal */
+  :root {
+    --c-black:    #1e1e2e; /* ANSI 30 / bg default */
+    --c-red:      #f38ba8; /* ANSI 31 */
+    --c-green:    #a6e3a1; /* ANSI 32 */
+    --c-yellow:   #f9e2af; /* ANSI 33 */
+    --c-blue:     #89b4fa; /* ANSI 34 */
+    --c-magenta:  #cba6f7; /* ANSI 35 */
+    --c-cyan:     #89dceb; /* ANSI 36 */
+    --c-white:    #cdd6f4; /* ANSI 37 */
+    --c-bblack:   #585b70; /* ANSI 90 (bright black) */
+    --c-bwhite:   #ffffff; /* ANSI 97 */
+    --bg-white:   #cdd6f4; /* ANSI 47 — white bg (active selection) */
+    --bg-bblack:  #45475a; /* ANSI 100 — dark gray bg (inactive selection) */
+    --bg-term:    #11111b;
+    --border:     #313244;
+  }
+  body { background: #1e1e2e; color: var(--c-white); font-family: 'Cascadia Code','Consolas',monospace; margin:0; padding:20px; font-size:13px; }
+  h2   { color: var(--c-magenta); margin:0 0 4px 0; font-size:1rem; }
+  .sub { color: var(--c-bblack); font-size:0.8rem; margin:0 0 18px 0; }
+  .label { font-size:0.7rem; color:var(--c-blue); text-transform:uppercase; letter-spacing:.08em; margin-bottom:5px; }
+  .scenario { margin-bottom:24px; }
+
+  /* ── Terminal chrome ── */
+  .term { background:var(--bg-term); border:1px solid var(--border); border-radius:5px; overflow:hidden; }
+  .col-headers { display:flex; border-bottom:1px solid var(--border); }
+  .ch { font-size:0.72rem; color:var(--c-blue); padding:2px 6px; border-right:1px solid var(--border); width:210px; box-sizing:border-box; }
+  .ch.flex { flex:1; border-right:none; }
+
+  /* ── File list rows ── */
+  .rows { }
+  .frow { display:flex; }
+  .cell { width:210px; padding:1px 6px; white-space:pre; overflow:hidden; text-overflow:ellipsis; box-sizing:border-box; }
+  .cell.flex { flex:1; }
+  .dir  { color:var(--c-blue); }
+  .file { color:var(--c-white); }
+  .dim  { color:var(--c-bblack); }
+
+  /* Selection states (match existing code: white-bg active, dark-gray-bg inactive) */
+  .sel-active   { background:var(--bg-white); color:#1e1e2e; } /* \x1b[47m + \x1b[30m */
+  .sel-active.dir { color:var(--c-blue); }                     /* \x1b[34m on white bg */
+  .sel-inactive { background:var(--bg-bblack); }               /* \x1b[100m */
+
+  /* Search match highlight — uses only ANSI 32 (green fg) / reverse for current */
+  .match-current { color:var(--c-green); background:var(--bg-white); font-weight:bold; } /* reverse + green */
+  .match-other   { color:var(--c-green); }                                               /* ANSI 32 only */
+
+  /* ── Bottom bars ── */
+  .path-bar   { background:#181825; color:var(--c-bblack); padding:2px 6px; border-top:1px solid var(--border); font-size:0.72rem; }
+  .status-bar { background:#181825; color:var(--c-bblack); padding:2px 6px; border-top:1px solid var(--border); font-size:0.72rem; display:flex; justify-content:space-between; }
+  .status-bar.search { color:var(--c-white); }
+  .sp { color:var(--c-yellow); }  /* / prompt char — ANSI 33 */
+  .cursor { background:var(--c-white); color:#1e1e2e; }
+  .match-count { color:var(--c-bblack); margin-left:auto; }
+
+  .note { border-left:3px solid var(--c-yellow); padding:8px 12px; margin-top:8px; font-size:0.75rem; color:var(--c-bblack); background:#1a1a2e; border-radius:0 4px 4px 0; }
+  .palette { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .swatch { display:flex; align-items:center; gap:5px; font-size:0.7rem; }
+  .sw { width:14px; height:14px; border-radius:2px; border:1px solid #313244; }
+  .ok { color: var(--c-green); }
+  .warn { color: var(--c-yellow); }
+</style>
+</head>
+<body>
+<h2>Quick Search &amp; Navigation — v2 Mockup</h2>
+<p class="sub">16-color-safe palette · search bar revised per feedback</p>
+
+<!-- ── Normal mode ── -->
+<div class="scenario">
+  <div class="label">Normal mode</div>
+  <div class="term">
+    <div class="col-headers">
+      <div class="ch">C:\Users\user\</div>
+      <div class="ch">Documents\</div>
+      <div class="ch flex">Work\</div>
+    </div>
+    <div class="rows">
+      <div class="frow">
+        <div class="cell dir">Desktop/</div>
+        <div class="cell dir">Projects/</div>
+        <div class="cell file">annual_report.docx</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir sel-inactive">Documents/</div>
+        <div class="cell dir sel-active">Work/</div>
+        <div class="cell file sel-inactive">report_2025.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Downloads/</div>
+        <div class="cell file">notes.txt</div>
+        <div class="cell file">report_draft.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Music/</div>
+        <div class="cell dim">…</div>
+        <div class="cell file">budget.xlsx</div>
+      </div>
+    </div>
+    <div class="path-bar">C:\Users\user\Documents\Work\</div>
+    <div class="status-bar">
+      <span>Esc=Quit | ↑↓=move | PgUp/PgDn=page | Home/End=top/bottom | /=search | Shift+V=Preview[off]</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Search mode, mid-type ── -->
+<div class="scenario">
+  <div class="label">Search mode — typed "rep" · current match bold green, others plain green</div>
+  <div class="term">
+    <div class="col-headers">
+      <div class="ch">C:\Users\user\</div>
+      <div class="ch">Documents\</div>
+      <div class="ch flex">Work\</div>
+    </div>
+    <div class="rows">
+      <div class="frow">
+        <div class="cell dir">Desktop/</div>
+        <div class="cell dir">Projects/</div>
+        <div class="cell file match-other">annual_report.docx</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir sel-inactive">Documents/</div>
+        <div class="cell dir sel-active">Work/</div>
+        <div class="cell file match-current">report_2025.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Downloads/</div>
+        <div class="cell file">notes.txt</div>
+        <div class="cell file match-other">report_draft.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Music/</div>
+        <div class="cell dim">…</div>
+        <div class="cell file">budget.xlsx</div>
+      </div>
+    </div>
+    <div class="path-bar">C:\Users\user\Documents\Work\report_2025.pdf</div>
+    <div class="status-bar search">
+      <span><span class="sp">/</span>rep<span class="cursor"> </span></span>
+      <span class="match-count">(1/3)</span>
+    </div>
+  </div>
+  <div class="note">
+    Status bar: <code>/rep▌</code> on the left · <code>(1/3)</code> pinned to right edge (doesn't shift as you type).
+    ↑/↓ fully captured → cycle matches only. Enter = confirm &amp; move cursor. Esc = cancel &amp; restore cursor.
+  </div>
+</div>
+
+<!-- ── Search mode, no match ── -->
+<div class="scenario">
+  <div class="label">Search mode — no match (e.g. "xyz")</div>
+  <div class="term">
+    <div class="col-headers">
+      <div class="ch">C:\Users\user\</div>
+      <div class="ch">Documents\</div>
+      <div class="ch flex">Work\</div>
+    </div>
+    <div class="rows">
+      <div class="frow">
+        <div class="cell dir">Desktop/</div>
+        <div class="cell dir">Projects/</div>
+        <div class="cell file">annual_report.docx</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir sel-inactive">Documents/</div>
+        <div class="cell dir sel-active">Work/</div>
+        <div class="cell file">report_2025.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Downloads/</div>
+        <div class="cell file">notes.txt</div>
+        <div class="cell file">report_draft.pdf</div>
+      </div>
+      <div class="frow">
+        <div class="cell dir">Music/</div>
+        <div class="cell dim">…</div>
+        <div class="cell file">budget.xlsx</div>
+      </div>
+    </div>
+    <div class="path-bar">C:\Users\user\Documents\Work\</div>
+    <div class="status-bar search" style="color:var(--c-red)">
+      <span><span class="sp">/</span>xyz<span class="cursor"> </span></span>
+      <span class="match-count" style="color:var(--c-red)">(0)</span>
+    </div>
+  </div>
+  <div class="note">
+    No match: prompt turns red (<code>ANSI 31</code>) · count shows <code>(0)</code>. Cursor stays put.
+  </div>
+</div>
+
+<!-- ── Palette reference ── -->
+<div class="scenario">
+  <div class="label">16-color usage in this feature</div>
+  <div class="palette">
+    <div class="swatch"><div class="sw" style="background:var(--c-green)"></div><span class="ok">✓</span> ANSI 32 — match fg</div>
+    <div class="swatch"><div class="sw" style="background:var(--c-yellow)"></div><span class="ok">✓</span> ANSI 33 — / prompt char</div>
+    <div class="swatch"><div class="sw" style="background:var(--c-red)"></div><span class="ok">✓</span> ANSI 31 — no-match state</div>
+    <div class="swatch"><div class="sw" style="background:var(--bg-white); border-color:#999"></div><span class="ok">✓</span> ANSI 47 — current match bg (reuses existing active-sel bg)</div>
+    <div class="swatch"><div class="sw" style="background:var(--c-bblack)"></div><span class="ok">✓</span> ANSI 90 — match count fg</div>
+  </div>
+  <div style="margin-top:8px;font-size:0.72rem;color:var(--c-bblack)">
+    Image pixel preview uses 24-bit <code>\x1b[48;2;…]</code> — that's a separate, already-merged feature, not part of this design.
+  </div>
+</div>
+
+</body>
+</html>

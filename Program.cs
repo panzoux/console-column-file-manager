@@ -458,9 +458,8 @@ sealed class MigemoProvider : IDisposable
     static extern void migemo_close(IntPtr h);
 
     [System.Runtime.InteropServices.DllImport("migemo",
-        CharSet = System.Runtime.InteropServices.CharSet.Ansi,
         CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]
-    static extern IntPtr migemo_query(IntPtr h, string query);
+    static extern IntPtr migemo_query(IntPtr h, byte[] query);
 
     [System.Runtime.InteropServices.DllImport("migemo",
         CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]
@@ -478,8 +477,8 @@ sealed class MigemoProvider : IDisposable
         {
             string? dictFile = FindDictFile();
             if (dictFile == null) return;
-            DllLoaded = true;
             _handle = migemo_open(dictFile);
+            DllLoaded = true;
             IsAvailable = _handle != IntPtr.Zero;
         }
         catch
@@ -510,11 +509,18 @@ sealed class MigemoProvider : IDisposable
         if (!IsAvailable || string.IsNullOrEmpty(romaji)) return romaji;
         try
         {
-            IntPtr ptr = migemo_query(_handle, romaji);
+            byte[] queryBytes = System.Text.Encoding.UTF8.GetBytes(romaji + '\0');
+            IntPtr ptr = migemo_query(_handle, queryBytes);
             if (ptr == IntPtr.Zero) return romaji;
-            string? result = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ptr);
-            migemo_release(_handle, ptr);
-            return result ?? romaji;
+            try
+            {
+                string? result = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ptr);
+                return result ?? romaji;
+            }
+            finally
+            {
+                migemo_release(_handle, ptr);
+            }
         }
         catch { return romaji; }
     }
