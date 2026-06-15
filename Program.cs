@@ -2608,6 +2608,50 @@ static class Program
         await RebuildRightSideAsync(State.ActiveColumn);
     }
 
+    static async Task RecomputeMatchesAsync()
+    {
+        // Cancel any in-progress scan
+        State.Search.SearchCts?.Cancel();
+        State.Search.SearchCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        State.Search.SearchCts = cts;
+
+        string query = State.Search.Query;
+        bool regexMode = State.Search.RegexMode;
+        int anchor = State.Search.Anchor;
+        Column col = Columns[State.ActiveColumn];
+
+        lock (_searchLock)
+        {
+            State.Search.Matches.Clear();
+            State.Search.SearchDone = false;
+            State.Search.NeedsRecompute = false;
+        }
+
+        await Task.Run(() =>
+        {
+            for (int i = 0; i < col.Entries.Count; i++)
+            {
+                if (cts.Token.IsCancellationRequested) return;
+                string name = col.Entries[i].TrimEnd('/');
+                if (SearchHelper.MatchesSearchQuery(name, query, regexMode, _migemo))
+                {
+                    lock (_searchLock) { State.Search.Matches.Add(i); }
+                }
+            }
+
+            if (cts.Token.IsCancellationRequested) return;
+
+            lock (_searchLock)
+            {
+                State.Search.MatchIndex = SearchHelper.FindNearestMatchIndex(State.Search.Matches, anchor);
+                if (State.Search.Matches.Count > 0)
+                    col.Selected = State.Search.Matches[State.Search.MatchIndex];
+                State.Search.SearchDone = true;
+            }
+        }, cts.Token);
+    }
+
     static string GetCurrentFullPath()
     {
         if (State.ActiveColumn < 0 || State.ActiveColumn >= Columns.Count)
