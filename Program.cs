@@ -1646,6 +1646,12 @@ static class Program
 
                 ConsoleKeyInfo key = Console.ReadKey(true);
 
+                if (State.Search.Active)
+                {
+                    await HandleSearchKeyAsync(key);
+                    continue;
+                }
+
                 switch (key.KeyChar)
                 {
                     case (char)27: // Esc
@@ -1943,6 +1949,11 @@ static class Program
                     await RebuildRightSideAsync(State.ActiveColumn);
                     if (State.Preview.IsVisible) StartPreviewLoad();
                 }
+                break;
+
+            default:
+                if (key.KeyChar == '/' && key.Modifiers == ConsoleModifiers.None)
+                    EnterSearchMode();
                 break;
         }
     }
@@ -2650,6 +2661,113 @@ static class Program
                 State.Search.SearchDone = true;
             }
         }, cts.Token);
+    }
+
+    static void EnterSearchMode()
+    {
+        Column col = Columns[State.ActiveColumn];
+        State.Search.Active = true;
+        State.Search.Anchor = col.Selected;
+        State.Search.Query = "";
+        State.Search.RegexMode = false;
+        lock (_searchLock)
+        {
+            State.Search.Matches.Clear();
+            State.Search.SearchDone = true;
+            State.Search.NeedsRecompute = false;
+        }
+    }
+
+    static void ExitSearchMode(bool restoreCursor)
+    {
+        State.Search.SearchCts?.Cancel();
+        State.Search.SearchCts?.Dispose();
+        State.Search.SearchCts = null;
+        State.Search.Active = false;
+        if (restoreCursor)
+            Columns[State.ActiveColumn].Selected = State.Search.Anchor;
+        lock (_searchLock)
+        {
+            State.Search.Matches.Clear();
+            State.Search.SearchDone = true;
+        }
+    }
+
+    static async Task HandleSearchKeyAsync(ConsoleKeyInfo key)
+    {
+        SearchState s = State.Search;
+        Column col = Columns[State.ActiveColumn];
+
+        if (key.Key == ConsoleKey.Escape)
+        {
+            ExitSearchMode(restoreCursor: true);
+            return;
+        }
+
+        if (key.Key == ConsoleKey.Enter)
+        {
+            ExitSearchMode(restoreCursor: false);
+            return;
+        }
+
+        if (key.Key == ConsoleKey.R && (key.Modifiers & ConsoleModifiers.Control) != 0)
+        {
+            s.RegexMode = !s.RegexMode;
+            s.NeedsRecompute = true;
+            s.LastInputTime = DateTime.UtcNow;
+            return;
+        }
+
+        if (key.Key == ConsoleKey.DownArrow ||
+            (key.Key == ConsoleKey.N && (key.Modifiers & ConsoleModifiers.Control) != 0))
+        {
+            lock (_searchLock)
+            {
+                if (s.Matches.Count > 0)
+                {
+                    s.MatchIndex = (s.MatchIndex + 1) % s.Matches.Count;
+                    col.Selected = s.Matches[s.MatchIndex];
+                    UpdateHorizontalScroll();
+                }
+            }
+            return;
+        }
+
+        if (key.Key == ConsoleKey.UpArrow ||
+            (key.Key == ConsoleKey.P && (key.Modifiers & ConsoleModifiers.Control) != 0))
+        {
+            lock (_searchLock)
+            {
+                if (s.Matches.Count > 0)
+                {
+                    s.MatchIndex = (s.MatchIndex - 1 + s.Matches.Count) % s.Matches.Count;
+                    col.Selected = s.Matches[s.MatchIndex];
+                    UpdateHorizontalScroll();
+                }
+            }
+            return;
+        }
+
+        if (key.Key == ConsoleKey.Backspace)
+        {
+            if (s.Query.Length > 0)
+            {
+                s.Query = s.Query[..^1];
+                s.NeedsRecompute = true;
+                s.LastInputTime = DateTime.UtcNow;
+            }
+            return;
+        }
+
+        if (!char.IsControl(key.KeyChar))
+        {
+            s.Query += key.KeyChar;
+            s.NeedsRecompute = true;
+            s.LastInputTime = DateTime.UtcNow;
+            return;
+        }
+
+        // Everything else is swallowed
     }
 
     static string GetCurrentFullPath()
