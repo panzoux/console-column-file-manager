@@ -3115,6 +3115,21 @@ static class Program
         int startRow = 1;
         int scrollOffset = column.ScrollOffset;
 
+        bool inSearch = active && State.Search.Active;
+        HashSet<int> matchSet = new HashSet<int>();
+        int currentMatchEntry = -1;
+        if (inSearch)
+        {
+            lock (_searchLock)
+            {
+                if (State.Search.Matches.Count > 0)
+                {
+                    matchSet = new HashSet<int>(State.Search.Matches);
+                    currentMatchEntry = State.Search.Matches[State.Search.MatchIndex];
+                }
+            }
+        }
+
         // Loop ALL visible rows so short columns still contribute empty cells
         for (int i = 0; i < visibleHeight; i++)
         {
@@ -3127,6 +3142,10 @@ static class Program
             string text = column.Entries[scrollOffset + i];
             bool isDirectory = text.EndsWith("/");
             bool isSelected = (scrollOffset + i) == column.Selected;
+
+            int entryAbsIndex = scrollOffset + i;
+            bool isCurrentMatch = inSearch && entryAbsIndex == currentMatchEntry;
+            bool isOtherMatch   = inSearch && !isCurrentMatch && matchSet.Contains(entryAbsIndex);
 
             string prefix;
             if (isSelected)
@@ -3144,7 +3163,23 @@ static class Program
             // Truncate to fit
             string entry = CharacterWidth.SmartTruncate(text, maxEntryWidth);
 
-            if (isSelected)
+            if (isCurrentMatch)
+            {
+                // Current match: green background, black text
+                string bgColor = "\x1b[42m";
+                string textColor = "\x1b[30m";
+                string reset = "\x1b[0m";
+
+                string displayText = prefix + entry;
+                int displayTextWidth = CharacterWidth.GetStringWidth(displayText);
+                int paddingNeeded = Math.Max(0, contentSlot - displayTextWidth);
+
+                string fullLine = bgColor + textColor + displayText + new string(' ', paddingNeeded) + reset;
+                int totalDisplayWidth = displayTextWidth + paddingNeeded;
+
+                lines[startRow + i].AddColumn(fullLine, totalDisplayWidth, ColumnWidth);
+            }
+            else if (isSelected)
             {
                 // Background extends across full pane width
                 // Active: white bg, Inactive: gray bg
@@ -3162,6 +3197,13 @@ static class Program
                 int totalDisplayWidth = displayTextWidth + paddingNeeded;
 
                 lines[startRow + i].AddColumn(fullLine, totalDisplayWidth, ColumnWidth);
+            }
+            else if (isOtherMatch)
+            {
+                // Other match: green foreground text on default background
+                int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);
+                string coloredEntry = "\x1b[32m" + entry + "\x1b[0m";
+                lines[startRow + i].AddColumn(prefix + coloredEntry, displayWidth, ColumnWidth);
             }
             else
             {
