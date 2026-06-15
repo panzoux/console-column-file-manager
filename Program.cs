@@ -237,6 +237,30 @@ static class AnsiColors
     public static string Colorize(string text, string color) => color + text + Reset;
 }
 
+static class NavigationHelper
+{
+    public static void PageDown(Column c, int visibleHeight)
+    {
+        c.Selected = Math.Min(c.Selected + visibleHeight, c.Entries.Count - 1);
+    }
+
+    public static void PageUp(Column c, int visibleHeight)
+    {
+        c.Selected = Math.Max(c.Selected - visibleHeight, 0);
+    }
+
+    public static void GoHome(Column c)
+    {
+        c.Selected = 0;
+        c.ScrollOffset = 0;
+    }
+
+    public static void GoEnd(Column c)
+    {
+        c.Selected = Math.Max(0, c.Entries.Count - 1);
+    }
+}
+
 /// <summary>
 /// Proper CJK character width handling (adapted from twf\Utilities\CharacterWidthHelper.cs)
 /// </summary>
@@ -1821,6 +1845,73 @@ static class Program
 
             case ConsoleKey.F5:
                 RefreshCurrent();
+                break;
+
+            case ConsoleKey.PageUp:
+                NavigationHelper.PageUp(Columns[State.ActiveColumn], Console.WindowHeight - 3);
+                UpdateHorizontalScroll();
+                await RebuildRightSideAsync(State.ActiveColumn);
+                if (State.Preview.IsVisible) StartPreviewLoad();
+                break;
+
+            case ConsoleKey.PageDown:
+                NavigationHelper.PageDown(Columns[State.ActiveColumn], Console.WindowHeight - 3);
+                UpdateHorizontalScroll();
+                await RebuildRightSideAsync(State.ActiveColumn);
+                if (State.Preview.IsVisible) StartPreviewLoad();
+                break;
+
+            case ConsoleKey.Home:
+                NavigationHelper.GoHome(Columns[State.ActiveColumn]);
+                UpdateHorizontalScroll();
+                await RebuildRightSideAsync(State.ActiveColumn);
+                if (State.Preview.IsVisible) StartPreviewLoad();
+                break;
+
+            case ConsoleKey.End:
+                NavigationHelper.GoEnd(Columns[State.ActiveColumn]);
+                UpdateHorizontalScroll();
+                await RebuildRightSideAsync(State.ActiveColumn);
+                if (State.Preview.IsVisible) StartPreviewLoad();
+                break;
+
+            case ConsoleKey.G:
+                if (key.Modifiers == ConsoleModifiers.None)
+                {
+                    // g → top
+                    NavigationHelper.GoHome(Columns[State.ActiveColumn]);
+                    UpdateHorizontalScroll();
+                    await RebuildRightSideAsync(State.ActiveColumn);
+                    if (State.Preview.IsVisible) StartPreviewLoad();
+                }
+                else if (key.Modifiers == ConsoleModifiers.Shift)
+                {
+                    // G → bottom
+                    NavigationHelper.GoEnd(Columns[State.ActiveColumn]);
+                    UpdateHorizontalScroll();
+                    await RebuildRightSideAsync(State.ActiveColumn);
+                    if (State.Preview.IsVisible) StartPreviewLoad();
+                }
+                break;
+
+            case ConsoleKey.B:
+                if (key.Modifiers == ConsoleModifiers.Control)
+                {
+                    NavigationHelper.PageUp(Columns[State.ActiveColumn], Console.WindowHeight - 3);
+                    UpdateHorizontalScroll();
+                    await RebuildRightSideAsync(State.ActiveColumn);
+                    if (State.Preview.IsVisible) StartPreviewLoad();
+                }
+                break;
+
+            case ConsoleKey.F:
+                if (key.Modifiers == ConsoleModifiers.Control)
+                {
+                    NavigationHelper.PageDown(Columns[State.ActiveColumn], Console.WindowHeight - 3);
+                    UpdateHorizontalScroll();
+                    await RebuildRightSideAsync(State.ActiveColumn);
+                    if (State.Preview.IsVisible) StartPreviewLoad();
+                }
                 break;
         }
     }
