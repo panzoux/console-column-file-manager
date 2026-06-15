@@ -498,17 +498,22 @@ sealed class MigemoProvider : IDisposable
 
     public MigemoProvider()
     {
+        // Probe DLL availability before touching the dict
+        if (!System.Runtime.InteropServices.NativeLibrary.TryLoad("migemo", out _))
+            return; // DLL not present — silent
+        DllLoaded = true;
+
+        string? dictFile = FindDictFile();
+        if (dictFile == null) return; // DLL present but no dict found
+
         try
         {
-            string? dictFile = FindDictFile();
-            if (dictFile == null) return;
             _handle = migemo_open(dictFile);
-            DllLoaded = true;
             IsAvailable = _handle != IntPtr.Zero;
         }
         catch
         {
-            // DLL absent or failed to load — silent
+            // migemo_open failed — silent
         }
     }
 
