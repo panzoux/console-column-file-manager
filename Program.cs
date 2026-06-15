@@ -3038,22 +3038,36 @@ static class Program
         }
 
         // Status line
-        string status;
-        if (_lastErrorMessage != null)
+        if (State.Search.Active)
         {
-            status = _lastErrorMessage;
+            List<int> matchSnapshot;
+            bool done;
+            lock (_searchLock)
+            {
+                matchSnapshot = new List<int>(State.Search.Matches);
+                done = State.Search.SearchDone;
+            }
+            string searchBar = SearchHelper.BuildSearchStatusBar(State.Search, matchSnapshot, done, width);
+            frame[height - 1] = searchBar; // already padded to width
+        }
+        else if (_lastErrorMessage != null)
+        {
+            string status = _lastErrorMessage;
             _lastErrorMessage = null;  // Clear error after displaying
+            status = CharacterWidth.SmartTruncate(status, width);
+            frame[height - 1] = CharacterWidth.PadToWidth(status, width);
         }
         else
         {
             string previewHint = State.Preview.IsVisible ? "Shift+V=Preview[on]" : "Shift+V=Preview[off]";
+            string status;
             if (IsWindows())
-                status = $"Esc=Quit | Ctrl+Enter=Open | Shift+Enter=Menu | Ctrl+L/F5=Refresh | {previewHint}";
+                status = $"Esc=Quit | ↑↓=move | PgUp/PgDn=page | Home/End g/G=jump | /=search | Ctrl+Enter=Open | Shift+Enter=Menu | Ctrl+L/F5=Refresh | {previewHint}";
             else
-                status = $"Esc=Quit | Ctrl+Enter=Open File | Ctrl+L/F5=Refresh | {previewHint}";
+                status = $"Esc=Quit | ↑↓=move | PgUp/PgDn=page | Home/End g/G=jump | /=search | Ctrl+Enter=Open File | Ctrl+L/F5=Refresh | {previewHint}";
+            status = CharacterWidth.SmartTruncate(status, width);
+            frame[height - 1] = CharacterWidth.PadToWidth(status, width);
         }
-        status = CharacterWidth.SmartTruncate(status, width);
-        frame[height - 1] = CharacterWidth.PadToWidth(status, width);
 
         return frame;
     }
