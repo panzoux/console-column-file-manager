@@ -590,6 +590,50 @@ static class SearchHelper
             if (matches[i] >= anchor) return i;
         return 0;
     }
+
+    public static string BuildSearchStatusBar(SearchState search, List<int> matches, bool done, int width)
+    {
+        bool noMatch = matches.Count == 0 && search.Query.Length > 0 && done;
+
+        // Left: /query▌
+        string promptColor = noMatch ? "\x1b[31m" : "\x1b[33m";
+        string reset = "\x1b[0m";
+        string left = promptColor + "/" + reset + search.Query + "\x1b[7m \x1b[0m";
+        int leftLen = 1 + search.Query.Length + 1; // '/' + query + cursor
+
+        // Right: [regex]  (n/m*)
+        string regexTag = search.RegexMode ? "\x1b[33m[regex]\x1b[0m " : "";
+        int regexTagLen = search.RegexMode ? 8 : 0; // "[regex] " = 8 chars
+
+        string countPart;
+        int countLen;
+        if (search.Query.Length == 0)
+        {
+            countPart = "";
+            countLen = 0;
+        }
+        else if (noMatch)
+        {
+            countPart = "\x1b[31m(0)\x1b[0m";
+            countLen = 3;
+        }
+        else
+        {
+            int pos = matches.Count > 0 ? search.MatchIndex + 1 : 0;
+            int total = matches.Count;
+            string starPart = done ? "" : "\x1b[33m*\x1b[0m";
+            int starLen = done ? 0 : 1;
+            string inner = $"{pos}/{total}";
+            countPart = $"\x1b[90m({reset}{inner}{reset}{starPart}\x1b[90m)\x1b[0m";
+            countLen = 1 + inner.Length + starLen + 1; // ( inner * )
+        }
+
+        string right = regexTag + countPart;
+        int rightLen = regexTagLen + countLen;
+
+        int spaces = Math.Max(1, width - leftLen - rightLen);
+        return left + new string(' ', spaces) + right;
+    }
 }
 
 internal record PreviewContent(
