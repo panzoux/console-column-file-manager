@@ -241,6 +241,7 @@ static class NavigationHelper
 {
     public static void PageDown(Column c, int visibleHeight)
     {
+        if (c.Entries.Count == 0) return;
         c.Selected = Math.Min(c.Selected + visibleHeight, c.Entries.Count - 1);
     }
 
@@ -1878,13 +1879,13 @@ static class Program
             case ConsoleKey.G:
                 if (key.Modifiers == ConsoleModifiers.None)
                 {
-                    // g → top
+                    // g → top (must have NO modifiers)
                     NavigationHelper.GoHome(Columns[State.ActiveColumn]);
                     UpdateHorizontalScroll();
                     await RebuildRightSideAsync(State.ActiveColumn);
                     if (State.Preview.IsVisible) StartPreviewLoad();
                 }
-                else if (key.Modifiers == ConsoleModifiers.Shift)
+                else if ((key.Modifiers & ConsoleModifiers.Shift) != 0)
                 {
                     // G → bottom
                     NavigationHelper.GoEnd(Columns[State.ActiveColumn]);
@@ -1895,7 +1896,7 @@ static class Program
                 break;
 
             case ConsoleKey.B:
-                if (key.Modifiers == ConsoleModifiers.Control)
+                if ((key.Modifiers & ConsoleModifiers.Control) != 0)
                 {
                     NavigationHelper.PageUp(Columns[State.ActiveColumn], Console.WindowHeight - 3);
                     UpdateHorizontalScroll();
@@ -1905,7 +1906,7 @@ static class Program
                 break;
 
             case ConsoleKey.F:
-                if (key.Modifiers == ConsoleModifiers.Control)
+                if ((key.Modifiers & ConsoleModifiers.Control) != 0)
                 {
                     NavigationHelper.PageDown(Columns[State.ActiveColumn], Console.WindowHeight - 3);
                     UpdateHorizontalScroll();

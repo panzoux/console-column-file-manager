@@ -60,4 +60,12 @@ public class NavigationTests
         NavigationHelper.GoEnd(c);
         Assert.Equal(49, c.Selected);
     }
+
+    [Fact]
+    public void NavigatePage_Down_EmptyColumn_DoesNothing()
+    {
+        var c = MakeColumn(0);
+        NavigationHelper.PageDown(c, visibleHeight: 10);
+        Assert.Equal(0, c.Selected); // unchanged
+    }
 }
