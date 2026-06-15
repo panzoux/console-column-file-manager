@@ -516,7 +516,11 @@ sealed class MigemoProvider : IDisposable
     {
         var candidates = new[]
         {
+            Path.Combine(AppContext.BaseDirectory, "dict", "utf-8", "migemo-dict"),
             Path.Combine(AppContext.BaseDirectory, "dict", "migemo-dict"),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ColumnFileManager", "dict", "utf-8", "migemo-dict"),
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "ColumnFileManager", "dict", "migemo-dict"),
