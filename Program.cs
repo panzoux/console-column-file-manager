@@ -1640,6 +1640,12 @@ static class Program
 
                 if (!Console.KeyAvailable)
                 {
+                    if (State.Search.Active
+                        && State.Search.NeedsRecompute
+                        && (DateTime.UtcNow - State.Search.LastInputTime).TotalMilliseconds >= 300)
+                    {
+                        await RecomputeMatchesAsync();
+                    }
                     System.Threading.Thread.Sleep(50);
                     continue;
                 }
