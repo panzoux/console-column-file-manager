@@ -15,7 +15,7 @@ public class ImagePreviewTests
         image[1, 1] = new Rgba32(0, 0, 255, 255); // lower-right = blue
 
         // Act: tgtW=2, tgtH=2 → 1 terminal row
-        string[] lines = PreviewLoader.RenderPixelLines(image, 2, 2);
+        string[] lines = ImageSharpProxy.RenderPixelLines(image, 2, 2);
 
         // Assert
         Assert.Single(lines);
@@ -34,7 +34,7 @@ public class ImagePreviewTests
         image[0, 0] = new Rgba32(255, 0, 0, 127); // 50% transparent red
         image[0, 1] = new Rgba32(0, 255, 0, 255); // opaque green
 
-        string[] lines = PreviewLoader.RenderPixelLines(image, 1, 2);
+        string[] lines = ImageSharpProxy.RenderPixelLines(image, 1, 2);
 
         Assert.Single(lines);
         // upR = 255 * 127 / 255 = 127; loG = 255 * 255 / 255 = 255

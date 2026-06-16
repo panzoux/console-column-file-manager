@@ -17,4 +17,8 @@
   <ItemGroup>
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
   </ItemGroup>
+  <Target Name="CopyThirdPartyNotices" AfterTargets="Publish">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\THIRD-PARTY-NOTICES.txt"
+          DestinationFolder="$(PublishDir)" />
+  </Target>
 </Project>
