@@ -31,9 +31,6 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using System.ComponentModel;
 using System.Security.Cryptography;
 
@@ -1049,25 +1046,8 @@ internal static class PreviewLoader
                 if (!extracted) return meta;
             }
 
-            var (pixelLines, pixelWidth) = await Task.Run(() =>
-            {
-                ct.ThrowIfCancellationRequested();
-                using var image = Image.Load<Rgba32>(cachePath);
-                ct.ThrowIfCancellationRequested();
-
-                int srcW = image.Width;
-                int srcH = image.Height;
-                double scaleX = pixelCols > 0 ? (double)pixelCols / srcW : 1.0;
-                double scaleY = pixelRows > 0 ? (double)pixelRows / srcH : 1.0;
-                double scale  = Math.Min(scaleX, scaleY);
-                int tgtW = Math.Max(1, (int)(srcW * scale));
-                int tgtH = Math.Max(2, (int)(srcH * scale));
-                if (tgtH % 2 != 0) tgtH--;
-
-                image.Mutate(ctx => ctx.Resize(tgtW, tgtH));
-                string[] lines = RenderPixelLines(image, tgtW, tgtH);
-                return (lines, tgtW);
-            }, ct);
+            var (pixelLines, pixelWidth) = await Task.Run(
+                () => ImageSharpProxy.LoadFrameAndRender(cachePath, pixelCols, pixelRows, ct), ct);
 
             ct.ThrowIfCancellationRequested();
             return meta with { PixelLines = pixelLines, PixelWidth = pixelWidth };
@@ -1335,52 +1315,6 @@ internal static class PreviewLoader
         catch { return new PreviewContent(fileType.Label, FormatSize(new FileInfo(filePath).Length), modified, [], false); }
     }
 
-    // ── Image pixel rendering ─────────────────────────────────────────────
-    internal static string[] RenderPixelLines(Image<Rgba32> image, int tgtW, int tgtH)
-    {
-        // image is already resized to tgtW × tgtH by the caller
-        int termRows = tgtH / 2;
-        string[] lines = new string[termRows];
-        var sb = new StringBuilder(tgtW * 42);
-
-        for (int row = 0; row < termRows; row++)
-        {
-            sb.Clear();
-            int upperY = row * 2;
-            int lowerY = upperY + 1;
-
-            for (int x = 0; x < tgtW; x++)
-            {
-                Rgba32 up = image[x, upperY];
-                Rgba32 lo = image[x, lowerY];
-
-                // Alpha-blend against black background
-                byte upR = (byte)(up.R * up.A / 255);
-                byte upG = (byte)(up.G * up.A / 255);
-                byte upB = (byte)(up.B * up.A / 255);
-                byte loR = (byte)(lo.R * lo.A / 255);
-                byte loG = (byte)(lo.G * lo.A / 255);
-                byte loB = (byte)(lo.B * lo.A / 255);
-
-                // Upper pixel row → ANSI background; lower → foreground; char = ▄
-                sb.Append("\x1b[48;2;");
-                sb.Append(upR); sb.Append(';');
-                sb.Append(upG); sb.Append(';');
-                sb.Append(upB); sb.Append('m');
-                sb.Append("\x1b[38;2;");
-                sb.Append(loR); sb.Append(';');
-                sb.Append(loG); sb.Append(';');
-                sb.Append(loB); sb.Append('m');
-                sb.Append('▄');
-            }
-
-            sb.Append("\x1b[0m");
-            lines[row] = sb.ToString();
-        }
-
-        return lines;
-    }
-
     internal static async Task<PreviewContent> LoadImagePreviewAsync(
         string filePath, FileType fileType, string modified, int width, int bodyHeight, CancellationToken ct)
     {
@@ -1400,26 +1334,8 @@ internal static class PreviewLoader
             int pixelCols = width - 1;
             int pixelRows = (bodyHeight - 1) * 2;
 
-            // ImageSharp is CPU-bound; run on thread pool to stay async
-            var (pixelLines, pixelWidth) = await Task.Run(() =>
-            {
-                ct.ThrowIfCancellationRequested();
-                using var image = Image.Load<Rgba32>(filePath);
-                ct.ThrowIfCancellationRequested();
-
-                int srcW = image.Width;
-                int srcH = image.Height;
-                double scaleX = pixelCols > 0 ? (double)pixelCols / srcW : 1.0;
-                double scaleY = pixelRows > 0 ? (double)pixelRows / srcH : 1.0;
-                double scale  = Math.Min(scaleX, scaleY);
-                int tgtW = Math.Max(1, (int)(srcW * scale));
-                int tgtH = Math.Max(2, (int)(srcH * scale));
-                if (tgtH % 2 != 0) tgtH--;
-
-                image.Mutate(ctx => ctx.Resize(tgtW, tgtH));
-                string[] lines = RenderPixelLines(image, tgtW, tgtH);
-                return (lines, tgtW);
-            }, ct);
+            var (pixelLines, pixelWidth) = await Task.Run(
+                () => ImageSharpProxy.LoadAndRender(filePath, pixelCols, pixelRows, ct), ct);
 
             ct.ThrowIfCancellationRequested();
             return meta with { PixelLines = pixelLines, PixelWidth = pixelWidth };
@@ -2026,6 +1942,8 @@ static class Program
             default:
                 if (key.KeyChar == '/' && key.Modifiers == ConsoleModifiers.None)
                     EnterSearchMode();
+                else if (key.KeyChar == '\\' && key.Modifiers == ConsoleModifiers.None)
+                    await ShowContextMenuAsync();
                 break;
         }
     }
@@ -2571,9 +2489,6 @@ static class Program
 
         string name = c.Entries[c.Selected];
 
-        // Only show context menu for files, not directories
-        if (name.EndsWith("/"))
-            return;
 
         string filePath = GetCurrentFullPath();
         await LaunchContextMenuAsync(filePath);
@@ -2605,10 +2520,11 @@ static class Program
                 ctxmenuPath = "ctxmenu.exe";
             }
 
-            // Try to launch - will throw if not found in PATH
-            // Quote the file path to handle spaces and special characters (including Unicode)
-            string quotedPath = $"\"{filePath}\"";
-            Process.Start(ctxmenuPath, quotedPath);
+            // Use ArgumentList so .NET handles quoting correctly — avoids the "C:\" trap
+            // where a trailing backslash before a closing quote is parsed as an escaped quote.
+            var psi = new ProcessStartInfo(ctxmenuPath);
+            psi.ArgumentList.Add(filePath);
+            Process.Start(psi);
             _lastErrorMessage = null;
         }
         catch
@@ -2878,7 +2794,7 @@ static class Program
         string name = c.Entries[c.Selected];
 
         if (c.Path == "::DRIVES::")
-            return name.TrimEnd('/');
+            return name.TrimEnd('/') + "\\";
 
         return Path.Combine(c.Path, name.TrimEnd('/'));
     }
@@ -3104,9 +3020,9 @@ static class Program
             string previewHint = State.Preview.IsVisible ? "Shift+V=Preview[on]" : "Shift+V=Preview[off]";
             string status;
             if (IsWindows())
-                status = $"Esc=Quit | ↑↓=move | PgUp/PgDn=page | Home/End g/G=jump | /=search | Ctrl+Enter=Open | Shift+Enter=Menu | Ctrl+L/F5=Refresh | {previewHint}";
+                status = $"Esc=Quit | Ctrl+Enter=Open | Shift+Enter/\\=Menu | {previewHint}";
             else
-                status = $"Esc=Quit | ↑↓=move | PgUp/PgDn=page | Home/End g/G=jump | /=search | Ctrl+Enter=Open File | Ctrl+L/F5=Refresh | {previewHint}";
+                status = $"Esc=Quit | Ctrl+Enter=Open File | {previewHint}";
             status = CharacterWidth.SmartTruncate(status, width);
             frame[height - 1] = CharacterWidth.PadToWidth(status, width);
         }
