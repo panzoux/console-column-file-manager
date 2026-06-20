@@ -228,7 +228,7 @@ sealed class Line
 
 static class AnsiColors
 {
-    public const string Blue   = "\x1b[34m";
+    public const string Blue   = "\x1b[94m";
     public const string Yellow = "\x1b[33m";
     public const string Reset  = "\x1b[0m";
     public static string Colorize(string text, string color) => color + text + Reset;
@@ -3143,7 +3143,7 @@ static class Program
                 // Active: white bg, Inactive: gray bg
                 // Text: black for files, dark blue for directories
                 string bgColor = active ? "\x1b[47m" : "\x1b[100m";
-                string textColor = isDirectory ? "\x1b[34m" : "\x1b[30m";
+                string textColor = isDirectory ? "\x1b[94m" : "\x1b[30m";
                 string reset = "\x1b[0m";
 
                 string displayText = prefix + entry;
