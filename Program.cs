@@ -452,6 +452,7 @@ sealed class ScreenState
     public int PrevHeight;
     public readonly PreviewPane Preview = new();
     public SearchState Search = new();
+    public LeapState Leap = new();
 }
 
 sealed class SearchState
@@ -466,6 +467,22 @@ sealed class SearchState
     public bool NeedsRecompute;  // set by keystroke, consumed by debounce tick
     public DateTime LastInputTime;
     public bool SearchDone;      // false while async scan in progress
+}
+
+sealed class LeapState
+{
+    public bool Active;
+    public string Buffer = "";
+    public string RootDir = "";
+    public int RootColumnIndex;
+    public int RootCursorIndex;
+    public List<(string Dir, int BufferLen)> DirStack = new();
+    public bool NeedsRecompute;
+    public DateTime LastInputTime;
+    public bool NoMatch;             // Mode B: true when filter produced 0 results
+    public List<int> VisibleIndices = new();  // absolute entry indices passing the filter
+    public int ColumnScrollOffset;   // scroll offset within VisibleIndices
+    public bool PreviewWasVisible;   // Preview.IsVisible before F3; restored on exit
 }
 
 sealed class MigemoProvider : IDisposable
@@ -639,6 +656,89 @@ static class SearchHelper
 
         int spaces = Math.Max(1, width - leftLen - rightLen);
         return left + new string(' ', spaces) + right;
+    }
+
+    public static string BuildLeapStatusBar(LeapState leap, List<Column> columns, int activeColumn, int width)
+    {
+        // Parse buffer into trail and local filter
+        int lastSlash = leap.Buffer.LastIndexOf('/');
+        string trail = lastSlash >= 0 ? leap.Buffer[..(lastSlash + 1)] : "";
+        string localFilter = lastSlash >= 0 ? leap.Buffer[(lastSlash + 1)..] : leap.Buffer;
+
+        // Right anchor text (plain, for width measurement)
+        string rightPlain;
+        bool rightIsNoMatch = false;
+        if (leap.NoMatch)
+        {
+            rightPlain = "(no match)";
+            rightIsNoMatch = true;
+        }
+        else if (leap.VisibleIndices.Count == 0)
+        {
+            rightPlain = "";
+        }
+        else if (leap.VisibleIndices.Count == 1)
+        {
+            Column col = activeColumn < columns.Count ? columns[activeColumn] : null!;
+            bool isDir = col != null && col.Entries.Count > 0
+                         && col.Selected >= 0 && col.Selected < col.Entries.Count
+                         && col.Entries[col.Selected].EndsWith("/");
+            rightPlain = isDir ? "1 match · dir" : "1 match · file";
+        }
+        else
+        {
+            rightPlain = $"{leap.VisibleIndices.Count} matches";
+        }
+
+        int rightDisplayLen = rightPlain.Length;
+        int rightGapLen = rightDisplayLen > 0 ? 2 : 0;
+
+        // LEAP label: "LEAP  " = 6 display chars
+        int leapLabelLen = 6;
+        // Cursor block = 1 display char
+        int cursorLen = 1;
+
+        // Scrollable zone width (between LEAP label and cursor, before right anchor)
+        int scrollZoneWidth = width - leapLabelLen - cursorLen - rightGapLen - rightDisplayLen;
+        if (scrollZoneWidth < 0) scrollZoneWidth = 0;
+
+        // Full buffer display (plain chars for width)
+        string bufferPlain = trail + localFilter;
+        int bufferLen = bufferPlain.Length;
+
+        bool needsScroll = bufferLen > scrollZoneWidth;
+        int scrollIndLen = needsScroll ? 1 : 0;
+        int availableForBuffer = scrollZoneWidth - scrollIndLen;
+        if (availableForBuffer < 0) availableForBuffer = 0;
+
+        int skipLeft = needsScroll ? bufferLen - availableForBuffer : 0;
+
+        // How much of trail and localFilter is visible
+        int trailVisible = Math.Max(0, trail.Length - skipLeft);
+        int filterStart = Math.Max(0, skipLeft - trail.Length);
+        string visibleTrail = trailVisible > 0 ? trail[^trailVisible..] : "";
+        string visibleFilter = filterStart < localFilter.Length ? localFilter[filterStart..] : localFilter;
+
+        // Colored segments
+        string leapLabel = "\x1b[91mLEAP\x1b[0m  ";
+        string scrollInd = needsScroll ? "\x1b[2;37m◂\x1b[0m" : "";
+        string coloredTrail = visibleTrail.Length > 0 ? ("\x1b[2;37m" + visibleTrail + "\x1b[0m") : "";
+        string coloredFilter = visibleFilter.Length > 0 ? ("\x1b[93m" + visibleFilter + "\x1b[0m") : "";
+        string cursorBlock = "\x1b[93m\x1b[7m \x1b[0m";
+
+        // Padding
+        int usedSoFar = leapLabelLen + scrollIndLen + trailVisible + visibleFilter.Length + cursorLen + rightGapLen + rightDisplayLen;
+        int padding = Math.Max(0, width - usedSoFar);
+
+        string rightGap = new string(' ', rightGapLen + padding);
+        string coloredRight = rightDisplayLen == 0 ? (padding > 0 ? new string(' ', padding) : "") :
+            rightIsNoMatch ? ("\x1b[38;5;102m" + rightPlain + "\x1b[0m") :
+                             ("\x1b[92m" + rightPlain + "\x1b[0m");
+
+        if (rightDisplayLen == 0)
+            return leapLabel + scrollInd + coloredTrail + coloredFilter + cursorBlock + rightGap;
+
+        return leapLabel + scrollInd + coloredTrail + coloredFilter + cursorBlock + rightGap + coloredRight;
     }
 }
 
@@ -1618,7 +1718,22 @@ static class Program
 
                 if (!Console.KeyAvailable)
                 {
-                    if (State.Search.Active
+                    if (State.Leap.Active
+                        && State.Leap.NeedsRecompute
+                        && (DateTime.UtcNow - State.Leap.LastInputTime).TotalMilliseconds >= NavigationDebounceMs)
+                    {
+                        State.Leap.NeedsRecompute = false;
+                        ApplyLeapFilter();
+                        // Auto-enter single directory match
+                        if (!State.Leap.NoMatch && State.Leap.VisibleIndices.Count == 1)
+                        {
+                            Column ac = Columns[State.ActiveColumn];
+                            if (ac.Entries.Count > 0 && ac.Selected < ac.Entries.Count
+                                && ac.Entries[ac.Selected].EndsWith("/"))
+                                await EnterDirInLeapAsync();
+                        }
+                    }
+                    else if (State.Search.Active
                         && State.Search.NeedsRecompute
                         && (DateTime.UtcNow - State.Search.LastInputTime).TotalMilliseconds >= 300)
                     {
@@ -1632,6 +1747,12 @@ static class Program
                 }
 
                 ConsoleKeyInfo key = Console.ReadKey(true);
+
+                if (State.Leap.Active)
+                {
+                    await HandleLeapKeyAsync(key);
+                    continue;
+                }
 
                 if (State.Search.Active)
                 {
@@ -1866,6 +1987,10 @@ static class Program
             case ConsoleKey.L:
                 if ((key.Modifiers & ConsoleModifiers.Control) != 0)
                     RefreshCurrent();
+                break;
+
+            case ConsoleKey.F3:
+                EnterLeapMode();
                 break;
 
             case ConsoleKey.F5:
@@ -2681,6 +2806,342 @@ static class Program
         }
     }
 
+    static void EnterLeapMode()
+    {
+        Column col = Columns[State.ActiveColumn];
+        State.Leap.Active = true;
+        State.Leap.Buffer = "";
+        State.Leap.RootDir = col.Path;
+        State.Leap.RootColumnIndex = State.ActiveColumn;
+        State.Leap.RootCursorIndex = col.Selected;
+        State.Leap.DirStack.Clear();
+        State.Leap.NeedsRecompute = false;
+        State.Leap.NoMatch = false;
+        State.Leap.VisibleIndices.Clear();
+        State.Leap.ColumnScrollOffset = 0;
+        State.Leap.PreviewWasVisible = State.Preview.IsVisible;
+        if (State.Preview.IsVisible)
+        {
+            CancelPreviewLoad();
+            State.Preview.IsVisible = false;
+        }
+        UpdateHorizontalScroll();
+        ApplyLeapFilter(); // empty filter = all entries visible
+    }
+
+    static async Task ExitLeapModeAsync(bool restoreCursor)
+    {
+        State.Leap.Active = false;
+        State.Leap.NoMatch = false;
+        if (restoreCursor)
+        {
+            State.ActiveColumn = State.Leap.RootColumnIndex;
+            Columns[State.ActiveColumn].Selected = State.Leap.RootCursorIndex;
+        }
+        State.Preview.IsVisible = State.Leap.PreviewWasVisible;
+        UpdateHorizontalScroll();
+        await RebuildRightSideAsync(State.ActiveColumn);
+        if (State.Preview.IsVisible) StartPreviewLoad();
+    }
+
+    static async Task HandleLeapKeyAsync(ConsoleKeyInfo key)
+    {
+        LeapState leap = State.Leap;
+        Column col = Columns[State.ActiveColumn];
+
+        if (key.Key == ConsoleKey.F3)
+        {
+            await ExitLeapModeAsync(restoreCursor: false);
+            return;
+        }
+
+        if (key.Key == ConsoleKey.Escape)
+        {
+            await ExitLeapModeAsync(restoreCursor: true);
+            return;
+        }
+
+        // Ctrl+Enter: land here and exit (no open, no enter)
+        if (key.Key == ConsoleKey.Enter && (key.Modifiers & ConsoleModifiers.Control) != 0)
+        {
+            await ExitLeapModeAsync(restoreCursor: false);
+            return;
+        }
+
+        // Enter: navigate into dir or open file
+        if (key.Key == ConsoleKey.Enter)
+        {
+            if (col.Entries.Count == 0) return;
+            string name = col.Entries[col.Selected];
+            if (name.EndsWith("/"))
+                await EnterDirInLeapAsync();
+            else
+            {
+                string filePath = GetCurrentFullPath();
+                await ExitLeapModeAsync(restoreCursor: false);
+                await LaunchFileAsync(filePath);
+            }
+            return;
+        }
+
+        // Right: enter dir or select file (no open)
+        if (key.Key == ConsoleKey.RightArrow)
+        {
+            if (col.Entries.Count == 0) return;
+            string name = col.Entries[col.Selected];
+            if (name.EndsWith("/"))
+                await EnterDirInLeapAsync();
+            else
+                await ExitLeapModeAsync(restoreCursor: false);
+            return;
+        }
+
+        // Left: go to parent (strip local filter + "/")
+        if (key.Key == ConsoleKey.LeftArrow)
+        {
+            int lastSlash = leap.Buffer.LastIndexOf('/');
+            if (lastSlash >= 0)
+                leap.Buffer = leap.Buffer[..lastSlash];
+            await LeapStepUpAsync();
+            return;
+        }
+
+        // Down / Ctrl+N
+        if (key.Key == ConsoleKey.DownArrow ||
+            (key.Key == ConsoleKey.N && (key.Modifiers & ConsoleModifiers.Control) != 0))
+        {
+            MoveLeapCursorDown();
+            return;
+        }
+
+        // Up / Ctrl+P
+        if (key.Key == ConsoleKey.UpArrow ||
+            (key.Key == ConsoleKey.P && (key.Modifiers & ConsoleModifiers.Control) != 0))
+        {
+            MoveLeapCursorUp();
+            return;
+        }
+
+        // Backspace
+        if (key.Key == ConsoleKey.Backspace)
+        {
+            if (leap.Buffer.Length == 0) return;
+            char removed = leap.Buffer[^1];
+            leap.Buffer = leap.Buffer[..^1];
+            if (removed == '/')
+                await LeapStepUpAsync();
+            else
+            {
+                leap.NeedsRecompute = true;
+                leap.LastInputTime = DateTime.UtcNow;
+            }
+            return;
+        }
+
+        // Ctrl+U: clear local filter, stay in current dir
+        if (key.Key == ConsoleKey.U && (key.Modifiers & ConsoleModifiers.Control) != 0)
+        {
+            int lastSlash = leap.Buffer.LastIndexOf('/');
+            leap.Buffer = lastSlash >= 0 ? leap.Buffer[..(lastSlash + 1)] : "";
+            leap.NoMatch = false;
+            ApplyLeapFilter();
+            return;
+        }
+
+        // Ctrl+K: return to leap root
+        if (key.Key == ConsoleKey.K && (key.Modifiers & ConsoleModifiers.Control) != 0)
+        {
+            await GoLeapRootAsync();
+            return;
+        }
+
+        // Printable character: append to buffer
+        if (!char.IsControl(key.KeyChar))
+        {
+            leap.Buffer += key.KeyChar;
+            leap.NeedsRecompute = true;
+            leap.LastInputTime = DateTime.UtcNow;
+        }
+    }
+
+    static async Task EnterDirInLeapAsync()
+    {
+        Column col = Columns[State.ActiveColumn];
+        if (col.Entries.Count == 0 || col.Selected >= col.Entries.Count) return;
+        string name = col.Entries[col.Selected];
+        if (!name.EndsWith("/")) return;
+
+        // Append "/" to buffer (local filter stays as the part that matched)
+        State.Leap.Buffer += "/";
+        State.Leap.DirStack.Add((col.Path, State.Leap.Buffer.Length));
+
+        // Navigate into the directory (same as EnterAsync, but preview stays frozen during leap)
+        State.ActiveColumn++;
+        UpdateHorizontalScroll();
+        await RebuildRightSideAsync(State.ActiveColumn - 1);
+
+        // Reset leap filter state for new directory
+        State.Leap.NoMatch = false;
+        State.Leap.ColumnScrollOffset = 0;
+        ApplyLeapFilter(); // empty local filter = all entries visible
+    }
+
+    static async Task LeapStepUpAsync()
+    {
+        if (State.ActiveColumn <= State.Leap.RootColumnIndex) return;
+
+        if (State.Leap.DirStack.Count > 0)
+            State.Leap.DirStack.RemoveAt(State.Leap.DirStack.Count - 1);
+
+        State.ActiveColumn--;
+        UpdateHorizontalScroll();
+        await RebuildRightSideAsync(State.ActiveColumn);
+        // Preview stays frozen during leap; updated on exit
+
+        State.Leap.NoMatch = false;
+        State.Leap.ColumnScrollOffset = 0;
+        ApplyLeapFilter();
+    }
+
+    static async Task GoLeapRootAsync()
+    {
+        while (State.ActiveColumn > State.Leap.RootColumnIndex)
+            State.ActiveColumn--;
+        State.Leap.DirStack.Clear();
+        State.Leap.Buffer = "";
+        UpdateHorizontalScroll();
+        await RebuildRightSideAsync(State.ActiveColumn);
+        // Preview stays frozen during leap; updated on exit
+        State.Leap.NoMatch = false;
+        State.Leap.ColumnScrollOffset = 0;
+        ApplyLeapFilter();
+    }
+
+    static void MoveLeapCursorDown()
+    {
+        List<int> vis = State.Leap.VisibleIndices;
+        if (vis.Count == 0) return;
+        int cur = vis.IndexOf(Columns[State.ActiveColumn].Selected);
+        int next = Math.Min(cur + 1, vis.Count - 1);
+        Columns[State.ActiveColumn].Selected = vis[next];
+    }
+
+    static void MoveLeapCursorUp()
+    {
+        List<int> vis = State.Leap.VisibleIndices;
+        if (vis.Count == 0) return;
+        int cur = vis.IndexOf(Columns[State.ActiveColumn].Selected);
+        if (cur < 0) cur = vis.Count;
+        int prev = Math.Max(cur - 1, 0);
+        Columns[State.ActiveColumn].Selected = vis[prev];
+    }
+
+    static void ApplyLeapFilter()
+    {
+        LeapState leap = State.Leap;
+        Column col = Columns[State.ActiveColumn];
+
+        // Extract local filter = everything after the last "/"
+        int lastSlash = leap.Buffer.LastIndexOf('/');
+        string localFilter = lastSlash >= 0 ? leap.Buffer[(lastSlash + 1)..] : leap.Buffer;
+
+        leap.VisibleIndices.Clear();
+
+        if (localFilter.Length == 0)
+        {
+            // Empty filter: all entries visible
+            for (int i = 0; i < col.Entries.Count; i++)
+                leap.VisibleIndices.Add(i);
+            leap.NoMatch = false;
+            if (col.Entries.Count > 0 && (col.Selected < 0 || col.Selected >= col.Entries.Count))
+                col.Selected = 0;
+            leap.ColumnScrollOffset = 0;
+            return;
+        }
+
+        string[] segments = SplitLeapSegments(localFilter);
+
+        var prefixMatches = new List<int>();
+        var substringMatches = new List<int>();
+
+        for (int i = 0; i < col.Entries.Count; i++)
+        {
+            string entry = col.Entries[i];
+            if (!LeapAllSegmentsMatch(entry, segments)) continue;
+
+            // Priority: prefix match on first segment > substring
+            if (entry.StartsWith(segments[0].Replace("\\ ", " "), StringComparison.OrdinalIgnoreCase))
+                prefixMatches.Add(i);
+            else
+                substringMatches.Add(i);
+        }
+
+        // Migemo fallback: only when no regular matches
+        var migemoMatches = new List<int>();
+        if (prefixMatches.Count == 0 && substringMatches.Count == 0 && _migemo?.IsAvailable == true)
+        {
+            foreach (string seg in segments)
+            {
+                string pattern = _migemo.ExpandPattern(seg.Replace("\\ ", " "));
+                if (string.IsNullOrEmpty(pattern)) continue;
+                try
+                {
+                    var rx = new System.Text.RegularExpressions.Regex(
+                        pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    for (int i = 0; i < col.Entries.Count; i++)
+                        if (!migemoMatches.Contains(i) && rx.IsMatch(col.Entries[i]))
+                            migemoMatches.Add(i);
+                }
+                catch { }
+            }
+        }
+
+        var added = new HashSet<int>();
+        foreach (int i in prefixMatches) { if (added.Add(i)) leap.VisibleIndices.Add(i); }
+        foreach (int i in substringMatches) { if (added.Add(i)) leap.VisibleIndices.Add(i); }
+        foreach (int i in migemoMatches) { if (added.Add(i)) leap.VisibleIndices.Add(i); }
+
+        if (leap.VisibleIndices.Count == 0)
+        {
+            leap.NoMatch = true; // Mode B: keep buffer, show (no match) in bar
+            return;
+        }
+
+        leap.NoMatch = false;
+        col.Selected = leap.VisibleIndices[0]; // cursor to highest-priority match
+        leap.ColumnScrollOffset = 0;
+    }
+
+    static bool LeapAllSegmentsMatch(string entry, string[] segments)
+    {
+        foreach (string seg in segments)
+            if (!entry.Contains(seg.Replace("\\ ", " "), StringComparison.OrdinalIgnoreCase))
+                return false;
+        return true;
+    }
+
+    static string[] SplitLeapSegments(string filter)
+    {
+        var segments = new List<string>();
+        var current = new System.Text.StringBuilder();
+        for (int i = 0; i < filter.Length; i++)
+        {
+            if (filter[i] == '\\' && i + 1 < filter.Length && filter[i + 1] == ' ')
+            {
+                current.Append("\\ ");
+                i++;
+            }
+            else if (filter[i] == ' ')
+            {
+                if (current.Length > 0) { segments.Add(current.ToString()); current.Clear(); }
+            }
+            else
+                current.Append(filter[i]);
+        }
+        if (current.Length > 0) segments.Add(current.ToString());
+        return segments.Count > 0 ? segments.ToArray() : new[] { filter };
+    }
+
     static async Task HandleSearchKeyAsync(ConsoleKeyInfo key)
     {
         SearchState s = State.Search;
@@ -2996,7 +3457,12 @@ static class Program
         }
 
         // Status line
-        if (State.Search.Active)
+        if (State.Leap.Active)
+        {
+            string leapBar = SearchHelper.BuildLeapStatusBar(State.Leap, Columns, State.ActiveColumn, width);
+            frame[height - 1] = leapBar;
+        }
+        else if (State.Search.Active)
         {
             List<int> matchSnapshot;
             bool done;
@@ -3036,11 +3502,26 @@ static class Program
 
         int entryCount = column.Entries.Count;
 
-        // Auto-scroll to keep selection visible
-        if (column.Selected < column.ScrollOffset)
-            column.ScrollOffset = column.Selected;
-        if (column.Selected >= column.ScrollOffset + visibleHeight)
-            column.ScrollOffset = column.Selected - visibleHeight + 1;
+        bool inLeap = active && State.Leap.Active;
+        List<int>? leapVisible = inLeap ? State.Leap.VisibleIndices : null;
+
+        // Auto-scroll: leap uses virtual scroll over visible indices; normal uses raw index
+        if (inLeap && leapVisible != null)
+        {
+            int visPos = leapVisible.Count > 0 ? leapVisible.IndexOf(column.Selected) : 0;
+            if (visPos < 0) visPos = 0;
+            int ls = State.Leap.ColumnScrollOffset;
+            if (visPos < ls) ls = visPos;
+            if (visPos >= ls + visibleHeight) ls = visPos - visibleHeight + 1;
+            State.Leap.ColumnScrollOffset = Math.Max(0, ls);
+        }
+        else
+        {
+            if (column.Selected < column.ScrollOffset)
+                column.ScrollOffset = column.Selected;
+            if (column.Selected >= column.ScrollOffset + visibleHeight)
+                column.ScrollOffset = column.Selected - visibleHeight + 1;
+        }
 
         // Content slot: non-first columns lose 1 display col to the separator
         int separatorWidth = isFirstVisible ? 0 : 1;
@@ -3088,88 +3569,131 @@ static class Program
             }
         }
 
-        // Loop ALL visible rows so short columns still contribute empty cells
-        for (int i = 0; i < visibleHeight; i++)
+        if (inLeap && leapVisible != null)
         {
-            if (scrollOffset + i >= entryCount)
+            // Leap mode: render only visible (matching) entries; non-matching entries are hidden
+            int leapScroll = State.Leap.ColumnScrollOffset;
+            for (int i = 0; i < visibleHeight; i++)
             {
-                lines[startRow + i].AddColumn("", 0, ColumnWidth);
-                continue;
+                int vi = leapScroll + i;
+                if (vi >= leapVisible.Count)
+                {
+                    lines[startRow + i].AddColumn("", 0, ColumnWidth);
+                    continue;
+                }
+                int absIdx = leapVisible[vi];
+                string text = column.Entries[absIdx];
+                bool isDirectory = text.EndsWith("/");
+                bool isSelected = absIdx == column.Selected;
+
+                string prefix = (isSelected && active) ? "> " : "  ";
+                string entry = CharacterWidth.SmartTruncate(text, maxEntryWidth);
+
+                if (isSelected && active)
+                {
+                    string bgColor = "\x1b[47m";
+                    string textColor = isDirectory ? "\x1b[94m" : "\x1b[30m";
+                    string reset = "\x1b[0m";
+                    string displayText = prefix + entry;
+                    int displayTextWidth = CharacterWidth.GetStringWidth(displayText);
+                    int paddingNeeded = Math.Max(0, contentSlot - displayTextWidth);
+                    string fullLine = bgColor + textColor + displayText + new string(' ', paddingNeeded) + reset;
+                    lines[startRow + i].AddColumn(fullLine, displayTextWidth + paddingNeeded, ColumnWidth);
+                }
+                else
+                {
+                    int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);
+                    if (isDirectory)
+                        entry = AnsiColors.Colorize(entry, AnsiColors.Blue);
+                    lines[startRow + i].AddColumn(prefix + entry, displayWidth, ColumnWidth);
+                }
             }
-
-            string text = column.Entries[scrollOffset + i];
-            bool isDirectory = text.EndsWith("/");
-            bool isSelected = (scrollOffset + i) == column.Selected;
-
-            int entryAbsIndex = scrollOffset + i;
-            bool isCurrentMatch = inSearch && entryAbsIndex == currentMatchEntry;
-            bool isOtherMatch   = inSearch && !isCurrentMatch && matchSet.Contains(entryAbsIndex);
-
-            string prefix;
-            if (isSelected)
+        }
+        else
+        {
+            // Normal / search mode: render all entries, highlight matches
+            for (int i = 0; i < visibleHeight; i++)
             {
-                if (active)
-                    prefix = "> ";
-                else if (isLeft)
-                    prefix = "] ";
+                if (scrollOffset + i >= entryCount)
+                {
+                    lines[startRow + i].AddColumn("", 0, ColumnWidth);
+                    continue;
+                }
+
+                string text = column.Entries[scrollOffset + i];
+                bool isDirectory = text.EndsWith("/");
+                bool isSelected = (scrollOffset + i) == column.Selected;
+
+                int entryAbsIndex = scrollOffset + i;
+                bool isCurrentMatch = inSearch && entryAbsIndex == currentMatchEntry;
+                bool isOtherMatch   = inSearch && !isCurrentMatch && matchSet.Contains(entryAbsIndex);
+
+                string prefix;
+                if (isSelected)
+                {
+                    if (active)
+                        prefix = "> ";
+                    else if (isLeft)
+                        prefix = "] ";
+                    else
+                        prefix = "  ";
+                }
                 else
                     prefix = "  ";
-            }
-            else
-                prefix = "  ";
 
-            // Truncate to fit
-            string entry = CharacterWidth.SmartTruncate(text, maxEntryWidth);
+                // Truncate to fit
+                string entry = CharacterWidth.SmartTruncate(text, maxEntryWidth);
 
-            if (isCurrentMatch)
-            {
-                // Current match: green background, black text
-                string bgColor = "\x1b[42m";
-                string textColor = "\x1b[30m";
-                string reset = "\x1b[0m";
+                if (isCurrentMatch)
+                {
+                    // Current match: green background, black text
+                    string bgColor = "\x1b[42m";
+                    string textColor = "\x1b[30m";
+                    string reset = "\x1b[0m";
 
-                string displayText = prefix + entry;
-                int displayTextWidth = CharacterWidth.GetStringWidth(displayText);
-                int paddingNeeded = Math.Max(0, contentSlot - displayTextWidth);
+                    string displayText = prefix + entry;
+                    int displayTextWidth = CharacterWidth.GetStringWidth(displayText);
+                    int paddingNeeded = Math.Max(0, contentSlot - displayTextWidth);
 
-                string fullLine = bgColor + textColor + displayText + new string(' ', paddingNeeded) + reset;
-                int totalDisplayWidth = displayTextWidth + paddingNeeded;
+                    string fullLine = bgColor + textColor + displayText + new string(' ', paddingNeeded) + reset;
+                    int totalDisplayWidth = displayTextWidth + paddingNeeded;
 
-                lines[startRow + i].AddColumn(fullLine, totalDisplayWidth, ColumnWidth);
-            }
-            else if (isSelected)
-            {
-                // Background extends across full pane width
-                // Active: white bg, Inactive: gray bg
-                // Text: black for files, dark blue for directories
-                string bgColor = active ? "\x1b[47m" : "\x1b[100m";
-                string textColor = isDirectory ? "\x1b[94m" : "\x1b[30m";
-                string reset = "\x1b[0m";
+                    lines[startRow + i].AddColumn(fullLine, totalDisplayWidth, ColumnWidth);
+                }
+                else if (isSelected)
+                {
+                    // Background extends across full pane width
+                    // Active: white bg, Inactive: gray bg
+                    // Text: black for files, dark blue for directories
+                    string bgColor = active ? "\x1b[47m" : "\x1b[100m";
+                    string textColor = isDirectory ? "\x1b[94m" : "\x1b[30m";
+                    string reset = "\x1b[0m";
 
-                string displayText = prefix + entry;
-                int displayTextWidth = CharacterWidth.GetStringWidth(displayText);
-                int paddingNeeded = Math.Max(0, contentSlot - displayTextWidth);
+                    string displayText = prefix + entry;
+                    int displayTextWidth = CharacterWidth.GetStringWidth(displayText);
+                    int paddingNeeded = Math.Max(0, contentSlot - displayTextWidth);
 
-                // Build full line: background + text color + content + padding + reset
-                string fullLine = bgColor + textColor + displayText + new string(' ', paddingNeeded) + reset;
-                int totalDisplayWidth = displayTextWidth + paddingNeeded;
+                    // Build full line: background + text color + content + padding + reset
+                    string fullLine = bgColor + textColor + displayText + new string(' ', paddingNeeded) + reset;
+                    int totalDisplayWidth = displayTextWidth + paddingNeeded;
 
-                lines[startRow + i].AddColumn(fullLine, totalDisplayWidth, ColumnWidth);
-            }
-            else if (isOtherMatch)
-            {
-                // Other match: green foreground text on default background
-                int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);
-                string coloredEntry = "\x1b[32m" + entry + "\x1b[0m";
-                lines[startRow + i].AddColumn(prefix + coloredEntry, displayWidth, ColumnWidth);
-            }
-            else
-            {
-                // Non-selected: use original logic
-                int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);
-                if (isDirectory)
-                    entry = AnsiColors.Colorize(entry, AnsiColors.Blue);
-                lines[startRow + i].AddColumn(prefix + entry, displayWidth, ColumnWidth);
+                    lines[startRow + i].AddColumn(fullLine, totalDisplayWidth, ColumnWidth);
+                }
+                else if (isOtherMatch)
+                {
+                    // Other match: green foreground text on default background
+                    int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);
+                    string coloredEntry = "\x1b[32m" + entry + "\x1b[0m";
+                    lines[startRow + i].AddColumn(prefix + coloredEntry, displayWidth, ColumnWidth);
+                }
+                else
+                {
+                    // Non-selected: use original logic
+                    int displayWidth = 2 + CharacterWidth.GetStringWidth(entry);
+                    if (isDirectory)
+                        entry = AnsiColors.Colorize(entry, AnsiColors.Blue);
+                    lines[startRow + i].AddColumn(prefix + entry, displayWidth, ColumnWidth);
+                }
             }
         }
     }
